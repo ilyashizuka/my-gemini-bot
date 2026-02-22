@@ -8,7 +8,7 @@ GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 
 # Настройка новой модели 2.0
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('models/gemini-2.0-flash')
+model = genai.GenerativeModel('models/gemini-1.5-flash')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
