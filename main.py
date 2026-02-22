@@ -2,12 +2,13 @@ import os
 import telebot
 import google.generativeai as genai
 
-# Ключи
+# Ключи из Render
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 
-# Настройка
+# Настройка новой модели 2.0
 genai.configure(api_key=GOOGLE_API_KEY)
+model = genai.GenerativeModel('models/gemini-2.0-flash')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -15,25 +16,16 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 def handle_message(message):
     try:
         bot.send_chat_action(message.chat.id, 'typing')
-        
-        # Пробуем самую современную модель
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Запрос к нейросети
         response = model.generate_content(message.text)
         
-        bot.reply_to(message, response.text if response.text else "Пустой ответ")
-        
-    except Exception as e:
-        # Если ошибка, выводим её и список доступных моделей
-        error_msg = str(e)
-        if "404" in error_msg:
-            try:
-                models = [m.name for m in genai.list_models()]
-                available = "\n".join(models[:5]) # первые 5 моделей
-                bot.reply_to(message, f"Ошибка 404. Доступные модели на сервере:\n{available}")
-            except:
-                bot.reply_to(message, f"Ошибка: {error_msg}")
+        if response.text:
+            bot.reply_to(message, response.text)
         else:
-            bot.reply_to(message, f"Ошибка: {error_msg}")
+            bot.reply_to(message, "Нейросеть выдала пустой ответ.")
+            
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка: {str(e)}")
 
-print("Бот запущен!")
+print("Бот запущен на модели 2.0!")
 bot.infinity_polling()
