@@ -36,4 +36,5 @@ def handle_message(message):
         bot.reply_to(message, f"Ошибка: {str(e)}")
 
 print("Бот запущен!")
+print("Я ЖИВОЙ И СЛУШАЮ ТЕЛЕГРАМ!")
 bot.infinity_polling()
