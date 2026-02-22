@@ -22,9 +22,10 @@ def handle_message(message):
         response = model.generate_content(message.text)
         # Отправка ответа
         bot.reply_to(message, response.text)
-    except Exception as e:
-        print(f"Ошибка: {e}")
-        bot.reply_to(message, "Ой, я споткнулся. Попробуй еще раз!")
+       except Exception as e:
+        error_text = str(e)
+        bot.reply_to(message, f"Ошибка от Google: {error_text}")
+        print(f"Ошибка в логах: {error_text}")
 
 print("Бот успешно запущен и ждет сообщений в Telegram!")
 bot.infinity_polling()
