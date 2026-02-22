@@ -8,8 +8,6 @@ GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 
 # Настройка
 genai.configure(api_key=GOOGLE_API_KEY)
-# Используем самую стабильную версию имени модели
-model = genai.GenerativeModel('gemini-1.5-flash')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -17,12 +15,25 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 def handle_message(message):
     try:
         bot.send_chat_action(message.chat.id, 'typing')
-        # Прямой вызов генерации
+        
+        # Пробуем самую современную модель
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(message.text)
+        
         bot.reply_to(message, response.text if response.text else "Пустой ответ")
+        
     except Exception as e:
-        # Если снова 404, бот пришлет это
-        bot.reply_to(message, f"Ошибка: {str(e)}")
+        # Если ошибка, выводим её и список доступных моделей
+        error_msg = str(e)
+        if "404" in error_msg:
+            try:
+                models = [m.name for m in genai.list_models()]
+                available = "\n".join(models[:5]) # первые 5 моделей
+                bot.reply_to(message, f"Ошибка 404. Доступные модели на сервере:\n{available}")
+            except:
+                bot.reply_to(message, f"Ошибка: {error_msg}")
+        else:
+            bot.reply_to(message, f"Ошибка: {error_msg}")
 
 print("Бот запущен!")
 bot.infinity_polling()
