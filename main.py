@@ -1,6 +1,8 @@
 import os
 import telebot
 import google.generativeai as genai
+import requests
+from bs4 import BeautifulSoup
 from flask import Flask
 from threading import Thread
 
@@ -12,13 +14,37 @@ def home():
     return "I am alive!"
 
 def run():
-    # Render использует порт 8080 по умолчанию для веб-сервисов
     app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
     t = Thread(target=run)
     t.start()
-# ------------------------------------------
+
+# --- ФУНКЦИЯ ПАРСИНГА САЙТА ---
+def get_site_info():
+    try:
+        url = "https://vuoksa-virta.ru"
+        # Запрашиваем страницу (тайм-аут 10 сек)
+        response = requests.get(url, timeout=10)
+        response.encoding = 'utf-8' # Указываем кодировку для корректного русского текста
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Удаляем лишний мусор: скрипты и стили
+        for script_or_style in soup(["script", "style"]):
+            script_or_style.decompose()
+            
+        # Извлекаем текст
+        text = soup.get_text(separator=' ')
+        # Очищаем от лишних пробелов и пустых строк
+        lines = (line.strip() for line in text.splitlines())
+        clean_text = ' '.join(chunk for chunk in lines if chunk)
+        
+        # Берем первые 4000 символов, чтобы не превысить лимит контекста
+        return clean_text[:4000]
+    except Exception as e:
+        print(f"Ошибка парсинга: {e}")
+        return "Информация о компании временно недоступна."
 
 # 1. Загрузка ключей
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -44,19 +70,35 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 def handle_message(message):
     try:
         bot.send_chat_action(message.chat.id, 'typing')
-        response = model.generate_content(message.text)
+        
+        # Получаем свежие данные с сайта
+        context = get_site_info()
+        
+        # Формируем инструкцию для нейросети
+        prompt = (
+            f"Ты — официальный помощник базы отдыха 'Вуокса-Вирта'.\n"
+            f"Используй следующую информацию с сайта для ответа: {context}\n\n"
+            f"Вопрос клиента: {message.text}\n"
+            f"Отвечай вежливо и кратко на основе предоставленных данных."
+        )
+        
+        # Запрос к Gemini
+        response = model.generate_content(prompt)
+        
         if response.text:
-            bot.reply_to(message, response.text)
+            bot.send_message(message.chat.id, response.text)
         else:
-            bot.reply_to(message, "ИИ промолчал (фильтры безопасности).")
+            bot.send_message(message.chat.id, "К сожалению, я не смог найти ответ на этот вопрос.")
+            
     except Exception as e:
-        bot.reply_to(message, f"Ошибка: {str(e)}")
+        error_text = str(e)
+        bot.send_message(message.chat.id, f"Произошла ошибка: {error_text}")
+        print(f"Ошибка в боте: {error_text}")
 
-# ЗАПУСК СЕРВЕРА И БОТА
+# ЗАПУСК
 if __name__ == "__main__":
-    print("Запускаю веб-сервер для поддержки жизни...")
-    keep_alive()  # Запускаем Flask в отдельном потоке
+    print("Запускаю веб-сервер Flask...")
+    keep_alive()
     
-    print("Бот запущен!")
-    print("Я ЖИВОЙ И СЛУШАЮ ТЕЛЕГРАМ!")
+    print("Бот Вуокса-Вирта запущен!")
     bot.infinity_polling()
