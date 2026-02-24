@@ -4,7 +4,7 @@ import pymysql
 DB_CONFIG = {
     'host': 'localhost',
     'user': 'host1324224_botanik',
-    'password': 'ВАШ_ПАРОЛЬ_ОТ_БАЗЫ', 
+    'password': '807bba4c', 
     'database': 'host1324224_botanik',
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor
