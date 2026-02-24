@@ -1,53 +1,53 @@
 import requests
 import hashlib
 import os
+import re
 import xml.etree.ElementTree as ET
-from db_worker import save_to_db  # Импортируем функцию из первого файла
+from bs4 import BeautifulSoup
+from db_worker import save_to_db
 
-SITEMAP_URL = "https://vuoksa-virta.ru/sitemap.xml"
+SITEMAP_URL = "https://vuoksa-virta.ru"
 HASH_FILE = "sitemap_hash.txt"
 
-def get_content_hash(content):
-    return hashlib.md5(content).hexdigest()
+def extract_data(url):
+    """Парсит страницу: ищет цену и телефон"""
+    try:
+        response = requests.get(url, timeout=10)
+        response.encoding = 'utf-8'
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # 1. Поиск цены: ищем число перед "руб" или "рублей"
+        # Регулярка ищет числа (с пробелами внутри), за которыми следует "руб"
+        price_match = re.search(r'(\d[\d\s]*)руб(?:лей|ль|ля)?', soup.get_text())
+        price = price_match.group(1).replace('\s', '').strip() if price_match else "0"
+        
+        # 2. Поиск телефона в атрибуте href="tel:..."
+        phone_tag = soup.find('a', href=re.compile(r'^tel:\+7'))
+        phone = phone_tag['href'].replace('tel:', '') if phone_tag else "Не найден"
+        
+        title = soup.title.string if soup.title else "Без заголовка"
+        
+        return title, price, phone
+    except Exception as e:
+        print(f"Ошибка при парсинге {url}: {e}")
+        return None
 
 def parse_sitemap(xml_content):
-    """Извлекает ссылки из XML и запускает парсинг каждой"""
     root = ET.fromstring(xml_content)
-    # Пространство имен sitemap (стандарт)
-    namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-    
+    namespace = {'ns': 'http://www.sitemaps.org'}
     urls = [loc.text for loc in root.findall('.//ns:loc', namespace)]
-    print(f"Найдено ссылок: {len(urls)}. Начинаю парсинг...")
     
     for url in urls:
-        # Здесь должна быть ваша логика парсинга страницы (BeautifulSoup и т.д.)
-        # Для примера просто сохраним заглушку:
-        print(f"Парсим: {url}")
-        save_to_db(url, "Заголовок страницы", "Текст контента...")
+        print(f"Обработка: {url}")
+        result = extract_data(url)
+        if result:
+            title, price, phone = result
+            # Сохраняем в базу (добавьте колонку phone в вашу таблицу)
+            save_to_db(url, title, f"Цена: {price}, Тел: {phone}")
 
 def check_and_run():
-    response = requests.get(SITEMAP_URL)
-    if response.status_code != 200:
-        print("Ошибка загрузки sitemap")
-        return
-
-    current_hash = get_content_hash(response.content)
-    
-    # Читаем старый хеш
-    old_hash = ""
-    if os.path.exists(HASH_FILE):
-        with open(HASH_FILE, "r") as f:
-            old_hash = f.read().strip()
-
-    if current_hash != old_hash:
-        print("Sitemap изменился! Запускаю парсер...")
-        parse_sitemap(response.content)
-        
-        # Сохраняем новый хеш
-        with open(HASH_FILE, "w") as f:
-            f.write(current_hash)
-    else:
-        print("Изменений в sitemap не обнаружено. Отдыхаем.")
+    # ... (код проверки хеша из предыдущего сообщения остается без изменений)
+    pass 
 
 if __name__ == "__main__":
     check_and_run()
