@@ -5,21 +5,18 @@ import os
 import re
 import google.generativeai as genai
 
-# --- КОНФИГ ---
+# --- НАСТРОЙКИ ---
 TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
 # Настройка Gemini
+model = None
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
         model = genai.GenerativeModel('gemini-pro')
-    except:
-        model = None
-else:
-    model = None
+    except: model = None
 
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
@@ -37,65 +34,72 @@ def get_from_db(query=""):
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cursor:
-            if query:
+            # Если запрос пустой - отдаем всё (для кнопки Прайс)
+            if not query:
+                sql = "SELECT * FROM parsed_content ORDER BY price DESC LIMIT 30"
+                cursor.execute(sql)
+            else:
                 sql = "SELECT * FROM parsed_content WHERE title LIKE %s OR content LIKE %s"
                 cursor.execute(sql, (f'%{query}%', f'%{query}%'))
-            else:
-                sql = "SELECT * FROM parsed_content LIMIT 15"
-            res = cursor.fetchall()
-            conn.close()
-            return res
+            return cursor.fetchall()
     except Exception as e:
         print(f"ОШИБКА БАЗЫ: {e}")
         return []
+    finally:
+        if 'conn' in locals(): conn.close()
 
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    # ВАЖНО: Текст здесь должен СОВПАДАТЬ с текстом в обработчике ниже
     markup.add("🏠 Проживание", "🚣 Лодки")
     markup.add("♨️ Сауна", "🚕 Трансфер")
-    markup.add("📜 Весь прайс")
+    markup.add("📜 Весь прайс-лист")
     return markup
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.send_message(m.chat.id, "Привет! Я гид базы «Вуокса-Вирта». Нажмите кнопку или спросите меня о чем угодно.", reply_markup=main_menu())
+    bot.send_message(m.chat.id, "Меню обновлено! Выберите раздел:", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_all(m):
-    text = m.text.lower()
+    text = m.text # Текст кнопки
     
-    # Сначала проверяем базу (кнопки или ключевые слова)
-    search_query = ""
-    if "проживание" in text or "дом" in text: search_query = "дом"
-    elif "лодки" in text or "лодк" in text: search_query = "лодка"
-    elif "сауна" in text or "баня" in text: search_query = "сауна"
-    elif "трансфер" in text: search_query = "трансфер"
-    elif "прайс" in text: search_query = ""
+    # 1. Логика распознавания КНОПОК (с учетом смайликов)
+    search_term = None
     
-    # Если это короткое сообщение или кнопка — ищем в MySQL
-    if search_query or len(text) < 15:
-        results = get_from_db(search_query if search_query else text)
+    if "Проживание" in text:
+        search_term = "дом" # ищем дома по ключевому слову в базе
+    elif "Лодки" in text:
+        search_term = "лодка"
+    elif "Сауна" in text:
+        search_term = "сауна"
+    elif "Трансфер" in text:
+        search_term = "трансфер"
+    elif "Весь прайс-лист" in text:
+        search_term = "" # пустая строка вернет всё через get_from_db
+    
+    # 2. Если нажата кнопка — ищем в базе
+    if search_term is not None:
+        results = get_from_db(search_term)
         if results:
-            response = "📊 *Информация из прайса:*\n\n"
-            for r in results[:8]:
+            response = f"📊 *Результаты по разделу {text}:*\n\n"
+            for r in results:
                 p = f"{r['price']} руб." if r['price'] != "0" else "По запросу"
                 response += f"📍 *{r['title']}*\n💰 Цена: {p}\n📞 {r['phone']}\n\n"
             bot.send_message(m.chat.id, response, parse_mode="Markdown")
             return
 
-    # Если в базе не нашли или это сложный вопрос — идем к Gemini
+    # 3. Если это НЕ кнопка — отправляем в Gemini
     if model:
         bot.send_chat_action(m.chat.id, 'typing')
         try:
-            prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь вежливо: {m.text}. Телефон базы: +79219930209."
+            prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь вежливо на русском: {text}. Тел: +79219930209."
             chat_response = model.generate_content(prompt)
             bot.reply_to(m, chat_response.text)
-        except Exception as e:
-            print(f"ОШИБКА GEMINI: {e}")
-            bot.reply_to(m, "Нейросеть временно недоступна. Пожалуйста, используйте кнопки меню.")
+        except:
+            bot.reply_to(m, "Информация не найдена. Попробуйте нажать кнопку меню.")
     else:
-        bot.reply_to(m, "Для получения информации воспользуйтесь кнопками ниже.")
+        bot.reply_to(m, "Для получения цен нажмите на кнопки меню.")
 
 if __name__ == "__main__":
-    print("Бот запущен...")
     bot.infinity_polling()
