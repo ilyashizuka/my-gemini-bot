@@ -1,104 +1,53 @@
-import os
-import telebot
-import google.generativeai as genai
 import requests
-from bs4 import BeautifulSoup
-from flask import Flask
-from threading import Thread
+import hashlib
+import os
+import xml.etree.ElementTree as ET
+from db_worker import save_to_db  # Импортируем функцию из первого файла
 
-# --- БЛОК ДЛЯ ПОДДЕРЖКИ ЖИЗНИ (WAKE UP) ---
-app = Flask('')
+SITEMAP_URL = "https://vuoksa-virta.ru/sitemap.xml"
+HASH_FILE = "sitemap_hash.txt"
 
-@app.route('/')
-def home():
-    return "I am alive!"
+def get_content_hash(content):
+    return hashlib.md5(content).hexdigest()
 
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-# --- ФУНКЦИЯ ПАРСИНГА САЙТА ---
-def get_site_info():
-    try:
-        url = "https://vuoksa-virta.ru"
-        # Запрашиваем страницу (тайм-аут 10 сек)
-        response = requests.get(url, timeout=10)
-        response.encoding = 'utf-8' # Указываем кодировку для корректного русского текста
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Удаляем лишний мусор: скрипты и стили
-        for script_or_style in soup(["script", "style"]):
-            script_or_style.decompose()
-            
-        # Извлекаем текст
-        text = soup.get_text(separator=' ')
-        # Очищаем от лишних пробелов и пустых строк
-        lines = (line.strip() for line in text.splitlines())
-        clean_text = ' '.join(chunk for chunk in lines if chunk)
-        
-        # Берем первые 4000 символов, чтобы не превысить лимит контекста
-        return clean_text[:4000]
-    except Exception as e:
-        print(f"Ошибка парсинга: {e}")
-        return "Информация о компании временно недоступна."
-
-# 1. Загрузка ключей
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-
-# 2. Настройка Google AI
-genai.configure(api_key=GOOGLE_API_KEY)
-
-# Авто-подбор рабочей модели
-try:
-    models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    selected_model = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
-    model = genai.GenerativeModel(selected_model)
-    print(f"Выбрана модель: {selected_model}")
-except Exception as e:
-    print(f"Ошибка при поиске моделей: {e}")
-    model = genai.GenerativeModel('models/gemini-1.5-flash')
-
-# 3. Настройка бота
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    try:
-        bot.send_chat_action(message.chat.id, 'typing')
-        
-        # Получаем свежие данные с сайта
-        context = get_site_info()
-        
-        # Формируем инструкцию для нейросети
-        prompt = (
-            f"Ты — официальный помощник базы отдыха 'Вуокса-Вирта'.\n"
-            f"Используй следующую информацию с сайта для ответа: {context}\n\n"
-            f"Вопрос клиента: {message.text}\n"
-            f"Отвечай вежливо и кратко на основе предоставленных данных."
-        )
-        
-        # Запрос к Gemini
-        response = model.generate_content(prompt)
-        
-        if response.text:
-            bot.send_message(message.chat.id, response.text)
-        else:
-            bot.send_message(message.chat.id, "К сожалению, я не смог найти ответ на этот вопрос.")
-            
-    except Exception as e:
-        error_text = str(e)
-        bot.send_message(message.chat.id, f"Произошла ошибка: {error_text}")
-        print(f"Ошибка в боте: {error_text}")
-
-# ЗАПУСК
-if __name__ == "__main__":
-    print("Запускаю веб-сервер Flask...")
-    keep_alive()
+def parse_sitemap(xml_content):
+    """Извлекает ссылки из XML и запускает парсинг каждой"""
+    root = ET.fromstring(xml_content)
+    # Пространство имен sitemap (стандарт)
+    namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
     
-    print("Бот Вуокса-Вирта запущен!")
-    bot.infinity_polling()
+    urls = [loc.text for loc in root.findall('.//ns:loc', namespace)]
+    print(f"Найдено ссылок: {len(urls)}. Начинаю парсинг...")
+    
+    for url in urls:
+        # Здесь должна быть ваша логика парсинга страницы (BeautifulSoup и т.д.)
+        # Для примера просто сохраним заглушку:
+        print(f"Парсим: {url}")
+        save_to_db(url, "Заголовок страницы", "Текст контента...")
+
+def check_and_run():
+    response = requests.get(SITEMAP_URL)
+    if response.status_code != 200:
+        print("Ошибка загрузки sitemap")
+        return
+
+    current_hash = get_content_hash(response.content)
+    
+    # Читаем старый хеш
+    old_hash = ""
+    if os.path.exists(HASH_FILE):
+        with open(HASH_FILE, "r") as f:
+            old_hash = f.read().strip()
+
+    if current_hash != old_hash:
+        print("Sitemap изменился! Запускаю парсер...")
+        parse_sitemap(response.content)
+        
+        # Сохраняем новый хеш
+        with open(HASH_FILE, "w") as f:
+            f.write(current_hash)
+    else:
+        print("Изменений в sitemap не обнаружено. Отдыхаем.")
+
+if __name__ == "__main__":
+    check_and_run()
