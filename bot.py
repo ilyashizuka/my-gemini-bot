@@ -4,23 +4,28 @@ import pymysql
 import os
 import re
 import google.generativeai as genai
-from main import parse_site # Импортируем ваш парсер
 
-# --- НАСТРОЙКИ ---
+# --- КОНФИГ ---
 TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
 # Настройка Gemini
-genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-pro')
+if GEMINI_KEY:
+    try:
+        genai.configure(api_key=GEMINI_KEY)
+        model = genai.GenerativeModel('gemini-pro')
+    except:
+        model = None
+else:
+    model = None
 
-# Настройка БД
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
     'port': 3306,
     'user': 'host1324224_botanik',
-    'password': os.getenv('DB_PASSWORD', '807bba4c'),
+    'password': DB_PASSWORD,
     'database': 'host1324224_botanik',
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor
@@ -28,92 +33,69 @@ DB_CONFIG = {
 
 bot = telebot.TeleBot(TOKEN)
 
-# --- ФУНКЦИИ БАЗЫ ---
 def get_from_db(query=""):
-    conn = pymysql.connect(**DB_CONFIG)
     try:
+        conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cursor:
             if query:
                 sql = "SELECT * FROM parsed_content WHERE title LIKE %s OR content LIKE %s"
                 cursor.execute(sql, (f'%{query}%', f'%{query}%'))
             else:
-                sql = "SELECT * FROM parsed_content"
-                cursor.execute(sql)
-            return cursor.fetchall()
-    finally:
-        conn.close()
+                sql = "SELECT * FROM parsed_content LIMIT 15"
+            res = cursor.fetchall()
+            conn.close()
+            return res
+    except Exception as e:
+        print(f"ОШИБКА БАЗЫ: {e}")
+        return []
 
-# --- ГЛАВНОЕ МЕНЮ (КНОПКИ) ---
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🏠 Проживание", "🚣 Лодки")
     markup.add("♨️ Сауна", "🚕 Трансфер")
-    markup.add("📜 Весь прайс-лист")
+    markup.add("📜 Весь прайс")
     return markup
 
-# --- КОМАНДЫ ---
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.send_message(m.chat.id, "Привет! Я гид базы отдыха «Вуокса-Вирта». Выберите раздел в меню или просто спросите меня о чем-нибудь.", reply_markup=main_menu())
+    bot.send_message(m.chat.id, "Привет! Я гид базы «Вуокса-Вирта». Нажмите кнопку или спросите меня о чем угодно.", reply_markup=main_menu())
 
-@bot.message_handler(commands=['update'])
-def update(m):
-    if m.from_user.id == ADMIN_ID:
-        msg = bot.send_message(m.chat.id, "⏳ Начинаю обновление базы данных с сайта...")
-        try:
-            parse_site() # Вызов функции парсинга из main.py
-            bot.edit_message_text("✅ База данных успешно обновлена!", m.chat.id, msg.message_id)
-        except Exception as e:
-            bot.edit_message_text(f"❌ Ошибка при обновлении: {e}", m.chat.id, msg.message_id)
-    else:
-        bot.reply_to(m, "⛔ У вас нет прав администратора для этой команды.")
-
-# --- ОБРАБОТКА ТЕКСТА ---
 @bot.message_handler(func=lambda m: True)
 def handle_all(m):
     text = m.text.lower()
     
-    # Ключевые слова для поиска в базе
-    category_map = {
-        "проживание": "дом", "лодки": "лодка", 
-        "сауна": "сауна", "баня": "сауна", "трансфер": "трансфер"
-    }
+    # Сначала проверяем базу (кнопки или ключевые слова)
+    search_query = ""
+    if "проживание" in text or "дом" in text: search_query = "дом"
+    elif "лодки" in text or "лодк" in text: search_query = "лодка"
+    elif "сауна" in text or "баня" in text: search_query = "сауна"
+    elif "трансфер" in text: search_query = "трансфер"
+    elif "прайс" in text: search_query = ""
     
-    search_word = ""
-    for k, v in category_map.items():
-        if k in text: search_word = v
-    
-    # 1. Сначала ищем в MySQL (если нажата кнопка или короткий запрос)
-    db_results = []
-    if "прайс" in text:
-        db_results = get_from_db("")
-    elif search_word or len(text) < 15:
-        db_results = get_from_db(search_word if search_word else text)
+    # Если это короткое сообщение или кнопка — ищем в MySQL
+    if search_query or len(text) < 15:
+        results = get_from_db(search_query if search_query else text)
+        if results:
+            response = "📊 *Информация из прайса:*\n\n"
+            for r in results[:8]:
+                p = f"{r['price']} руб." if r['price'] != "0" else "По запросу"
+                response += f"📍 *{r['title']}*\n💰 Цена: {p}\n📞 {r['phone']}\n\n"
+            bot.send_message(m.chat.id, response, parse_mode="Markdown")
+            return
 
-    # 2. Если нашли в базе — выдаем точные цены
-    if db_results:
-        response = "📊 *Информация из нашего прайса:*\n\n"
-        for r in db_results[:10]:
-            p = f"{r['price']} руб." if r['price'] != "0" else "По запросу"
-            response += f"📍 *{r['title']}*\n💰 Цена: {p}\n📞 {r['phone']}\n\n"
-        bot.send_message(m.chat.id, response, parse_mode="Markdown")
-        
-    # 3. Если в базе нет или это сложный вопрос — идем к Gemini
-    else:
+    # Если в базе не нашли или это сложный вопрос — идем к Gemini
+    if model:
         bot.send_chat_action(m.chat.id, 'typing')
         try:
-            # Даем инструкции нейросети, как себя вести
-            prompt = (
-                f"Ты официальный помощник базы отдыха 'Вуокса-Вирта'. "
-                f"Ответь вежливо на вопрос: {m.text}. "
-                f"Если спрашивают цены, которых нет в прайсе, или условия бронирования, "
-                f"советуй звонить администратору: +79219930209."
-            )
+            prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь вежливо: {m.text}. Телефон базы: +79219930209."
             chat_response = model.generate_content(prompt)
             bot.reply_to(m, chat_response.text)
         except Exception as e:
-            bot.reply_to(m, "Я задумался... Пожалуйста, попробуйте еще раз или позвоните нам.")
+            print(f"ОШИБКА GEMINI: {e}")
+            bot.reply_to(m, "Нейросеть временно недоступна. Пожалуйста, используйте кнопки меню.")
+    else:
+        bot.reply_to(m, "Для получения информации воспользуйтесь кнопками ниже.")
 
 if __name__ == "__main__":
-    print("Бот Вуокса-Вирта запущен...")
+    print("Бот запущен...")
     bot.infinity_polling()
