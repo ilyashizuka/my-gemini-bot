@@ -1,11 +1,15 @@
+import os
 import pymysql
 
+# Пытаемся взять пароль из секретов GitHub, если не находим — берем локальный
+DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c') 
+
 DB_CONFIG = {
-    'host': 'mysql9.hostland.ru',      # Внешний адрес Hostland
-    'port': 3306,                      # Порт для вашей версии MySQL 5.7
-    'user': 'host1324224_botanik',     # Пользователь БД
-    'password': '807bba4c',           # Пароль (тот, что вы писали выше)
-    'database': 'host1324224_botanik', # Имя базы данных
+    'host': 'mysql9.hostland.ru',
+    'port': 3306,
+    'user': 'host1324224_botanik',
+    'password': DB_PASSWORD, # Используем переменную
+    'database': 'host1324224_botanik',
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor
 }
