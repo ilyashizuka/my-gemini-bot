@@ -1,8 +1,8 @@
 import pymysql
 
-# Настройки подключения к вашей базе host1324224_botanik
 DB_CONFIG = {
-    'host': 'localhost',
+    'host': 'mysql9.hostland.ru',
+    'port': 3306,  # Специфично для MySQL 5.7 на Hostland
     'user': 'host1324224_botanik',
     'password': '807bba4c', 
     'database': 'host1324224_botanik',
@@ -11,12 +11,8 @@ DB_CONFIG = {
 }
 
 def save_to_db(url, title, price, phone, content=""):
-    """
-    Сохраняет данные в БД. 
-    Если URL уже есть — обновляет цену и телефон.
-    """
-    connection = pymysql.connect(**DB_CONFIG)
     try:
+        connection = pymysql.connect(**DB_CONFIG)
         with connection.cursor() as cursor:
             sql = """
                 INSERT INTO `parsed_content` (`url`, `title`, `price`, `phone`, `content`) 
@@ -30,7 +26,7 @@ def save_to_db(url, title, price, phone, content=""):
             cursor.execute(sql, (url, title, price, phone, content))
             connection.commit()
     except Exception as e:
-        print(f"Ошибка БД при сохранении {url}: {e}")
+        print(f"Ошибка БД: {e}")
     finally:
-        connection.close()
-
+        if 'connection' in locals():
+            connection.close()
