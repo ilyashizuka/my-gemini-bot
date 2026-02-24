@@ -6,19 +6,16 @@ import requests
 import google.generativeai as genai
 from bs4 import BeautifulSoup
 
-# --- SETTINGS ---
+# --- НАСТРОЙКИ (Берем из Render) ---
 TOKEN = os.getenv('BOT_TOKEN')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 ADMIN_ID = os.getenv('ADMIN_ID', '0')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
-# Gemini configuration
+# Настройка Gemini
 if GEMINI_KEY:
-    try:
-        genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel('gemini-pro')
-    except:
-        model = None
+    genai.configure(api_key=GEMINI_KEY)
+    model = genai.GenerativeModel('gemini-pro')
 else:
     model = None
 
@@ -33,98 +30,99 @@ DB_CONFIG = {
 
 bot = telebot.TeleBot(TOKEN)
 
-# --- PARSER (INSIDE BOT) ---
+# --- УМНЫЙ ПОИСК В БАЗЕ (РЕШАЕТ ПРОБЛЕМУ РЕГИСТРА И ПАДЕЖЕЙ) ---
+def search_in_db(query_text):
+    # Очищаем запрос: в нижний регистр, убираем знаки препинания
+    query_text = query_text.lower().replace('?', '').strip()
+    # Берем основы слов длиннее 3 символов (например, "студии" -> "студи")
+    words = [w[:5] for w in query_text.split() if len(w) > 3]
+    if not words: words = [query_text]
+
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        with conn.cursor() as cur:
+            # Строим запрос: ищем вхождение любого из корней слов
+            conditions = []
+            params = []
+            for w in words:
+                conditions.append("(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)")
+                params.extend([f'%{w}%', f'%{w}%'])
+            
+            sql = f"SELECT * FROM parsed_content WHERE {' OR '.join(conditions)} LIMIT 5"
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"Ошибка поиска: {e}")
+        return []
+
+# --- ОБНОВЛЕННЫЙ ПАРСЕР (УБИРАЕТ ЛИШНИЕ БУКВЫ) ---
 def run_update():
     url = "https://vuoksa-virta.ru"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     res = requests.get(url, headers=headers, timeout=20)
     soup = BeautifulSoup(res.text, 'html.parser')
-
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE `parsed_content` ")
-            # Parse Houses (H3)
+            # Собираем Дома (H3)
             for h3 in soup.find_all('h3'):
-                title = h3.get_text(strip=True).strip(':')
-                if any(x in title.lower() for x in ['menu', 'navigation']): continue
+                # lstrip('а ') уберет одиночную "а" в начале, если она прилипла при парсинге
+                title = h3.get_text(strip=True).lstrip('а ').strip(':')
+                if any(x in title.lower() for x in ['меню', 'навигация']): continue
+                
                 for sib in h3.find_next_siblings():
                     if sib.name in ['h3', 'figure']: break
                     txt = sib.get_text(strip=True)
                     m = re.search(r'(\d[\d\s\xa0]*)руб', txt)
                     if m:
                         p = re.sub(r'\D', '', m.group(1))
-                        f_title = f"{title} (Additional spot)" if "additional" in txt.lower() else title
+                        f_t = f"{title} (Доп. место)" if "доп" in txt.lower() else title
                         cur.execute("INSERT INTO parsed_content (url, title, price, phone, content) VALUES (%s,%s,%s,%s,%s)",
-                                   (f"{url}#{hash(f_title+p)}", f_title, p, "+79219930209", txt[:400]))
-            # Boats
-            ship = soup.find('figure', id='priceShip')
-            if ship:
-                for row in ship.find_all('tr')[1:]:
-                    tds = row.find_all('td')
-                    if len(tds) >= 2:
-                        name = tds[0].get_text(strip=True)
-                        val = re.sub(r'\D', '', tds[1].text)
-                        cur.execute("INSERT INTO parsed_content (url, title, price, phone, content) VALUES (%s,%s,%s,%s,%s)",
-                                   (f"{url}#b{hash(name)}", f"Boat: {name}", val, "+79219930209", "Rental"))
+                                   (f"{url}#{hash(f_t+p)}", f_t, p, "+79219930209", txt[:500]))
             conn.commit()
     finally:
         conn.close()
 
-# --- COMMAND HANDLING (PRIORITY 1) ---
-
+# --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
 @bot.message_handler(commands=['update'])
 def update_cmd(m):
     if str(m.from_user.id) == str(ADMIN_ID):
-        bot.send_message(m.chat.id, "⌛ Updating the database from the source...")
+        bot.send_message(m.chat.id, "⏳ Обновляю базу...")
         try:
             run_update()
-            bot.send_message(m.chat.id, "✅ Done! The MySQL database is up to date.")
+            bot.send_message(m.chat.id, "✅ База данных обновлена!")
         except Exception as e:
-            bot.send_message(m.chat.id, f"❌ Parser error: {e}")
+            bot.send_message(m.chat.id, f"❌ Ошибка: {e}")
     else:
-        bot.reply_to(m, f"⛔ Access denied. Your ID: {m.from_user.id}. Enter it in ADMIN_ID on Render.")
-
-@bot.message_handler(commands=['start'])
-def start_cmd(m):
-    bot.send_message(m.chat.id, "Hello! I am the 'Vuoksa-Virta' database bot. Ask for the price (e.g., 'boat' or 'house').")
-
-# --- TEXT PROCESSING (PRIORITY 2) ---
+        bot.reply_to(m, f"Нет прав. Ваш ID: {m.from_user.id}")
 
 @bot.message_handler(func=lambda m: True)
 def handle_msg(m):
-    text_query = m.text.lower().strip()
+    # 1. ПРИОРИТЕТ: Ищем в базе данных (игнорируя регистр)
+    rows = search_in_db(m.text)
     
-    # 1. Search in MySQL (Free)
-    try:
-        conn = pymysql.connect(**DB_CONFIG)
-        with conn.cursor() as cur:
-            sql = "SELECT * FROM parsed_content WHERE title LIKE %s OR content LIKE %s"
-            cur.execute(sql, (f'%{text_query}%', f'%{text_query}%'))
-            rows = cur.fetchall()
-        conn.close()
+    if rows:
+        # Если в базе есть совпадения — Gemini не вызываем!
+        for r in rows:
+            price_text = f"{r['price']} руб." if r['price'] != "0" else "По запросу"
+            msg = f"🏠 *{r['title']}*\n💰 Цена: {price_text}\n📞 {r['phone']}\n\n_{r['content'][:300]}_"
+            bot.send_message(m.chat.id, msg, parse_mode="Markdown")
+        return
 
-        if rows:
-            for r in rows[:3]:
-                bot.send_message(m.chat.id, f"🏠 *{r['title']}*\n💰 Price: {r['price']} rub.\n📞 {r['phone']}", parse_mode="Markdown")
-            return
-    except Exception as e:
-        print(f"Search error: {e}")
-
-    # 2. If there is nothing in the database, go to Gemini
+    # 2. Если в базе пусто — идем к Gemini
     if model:
         bot.send_chat_action(m.chat.id, 'typing')
         try:
-            prompt = f"You are an assistant for the 'Vuoksa-Virta' database. Answer politely: {m.text}. Phone: +79219930209."
+            prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко: {m.text}. Телефон: +79219930209."
             res = model.generate_content(prompt)
             bot.reply_to(m, res.text)
-        except Exception as e:
-            if "429" in str(e):
-                bot.reply_to(m, "⚠️ Neural network limit exceeded. Try again tomorrow or ask for the price (boat, house).")
-            else:
-                bot.reply_to(m, "An error occurred. Call: +79219930209")
+        except:
+            bot.reply_to(m, "В прайсе не найдено. Звоните: +79219930209")
     else:
-        bot.reply_to(m, "There is no information in the price list. Call: +79219930209")
+        bot.reply_to(m, "Информация не найдена. Тел: +79219930209")
 
 if __name__ == "__main__":
     bot.infinity_polling()
