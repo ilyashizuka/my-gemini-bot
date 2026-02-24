@@ -7,7 +7,7 @@ DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
     'port': 3306,
-    'user': 'host1324224_botanik',
+    'user': 'host1324224',
     'password': DB_PASSWORD, # Используем переменную
     'database': 'host1324224_botanik',
     'charset': 'utf8mb4',
