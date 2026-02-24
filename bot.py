@@ -18,7 +18,7 @@ model = genai.GenerativeModel('gemini-pro')
 
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
-    'user': 'host1324224_botanik',
+    'user': 'host1324224',
     'password': DB_PASSWORD,
     'database': 'host1324224_botanik',
     'charset': 'utf8mb4',
