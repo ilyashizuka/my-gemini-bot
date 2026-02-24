@@ -5,7 +5,7 @@ from db_worker import DB_CONFIG
 from main import parse_site  # Импортируем ваш парсер
 
 TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = 7030907517:AAFys4bkUslfNdk6_G4d6sMD5BXlxaEbRus  # ЗАМЕНИТЕ на ваш Telegram ID (можно узнать у @userinfobot)
+ADMIN_ID = 6503375  # ЗАМЕНИТЕ на ваш Telegram ID (можно узнать у @userinfobot)
 
 bot = telebot.TeleBot(TOKEN)
 
