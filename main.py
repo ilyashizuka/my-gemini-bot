@@ -8,71 +8,68 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
 }
 
-def parse_site():
-    print(f"--- НАЧАЛО СТРУКТУРИРОВАННОГО СБОРА ---")
+def start_precise_parsing():
+    print(f"--- ТОЧЕЧНЫЙ ПАРСИНГ ПО СТРУКТУРЕ H3: {URL} ---")
     try:
         res = requests.get(URL, headers=HEADERS, timeout=20)
         if res.status_code != 200: return
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 1. ТЕЛЕФОН (для трансфера и справок)
+        # Общий телефон
         phone_tag = soup.find('a', href=re.compile(r'^tel:\+7'))
-        main_phone = phone_tag['href'].replace('tel:', '') if phone_tag else "+79219930209"
+        phone = phone_tag['href'].replace('tel:', '') if phone_tag else "+79219930209"
 
-        # 2. ОПРЕДЕЛЯЕМ КАТЕГОРИИ (ищем блоки по ключевым словам в заголовках)
-        sections = soup.find_all(['section', 'div', 'article'])
+        # Находим все заголовки H3 (это названия ваших домов/услуг)
+        sections = soup.find_all('h3')
         
-        results = []
-
-        for sec in sections:
-            sec_text = sec.get_text(separator=' ', strip=True).lower()
+        count = 0
+        for h3 in sections:
+            title = h3.get_text(strip=True).strip(':')
             
-            # А) ЛОДКИ (учитываем условие для проживающих/непроживающих)
-            if 'прокат' in sec_text and 'лод' in sec_text:
-                rows = sec.find_all(['tr', 'p', 'li'])
-                for r in rows:
-                    t = r.get_text(strip=True)
-                    if 'руб' in t:
-                        results.append(("Прокат лодок", t, main_phone))
+            # Игнорируем мусорные заголовки меню
+            if any(x in title.lower() for x in ['меню', 'навигация', 'главная', 'контакты']):
+                continue
 
-            # Б) ПРОЖИВАНИЕ (Дома, Студия, Терраса)
-            elif any(word in sec_text for word in ['террас', 'студия', 'дом']):
-                title_tag = sec.find(['h2', 'h3', 'h4'])
-                if title_tag:
-                    title = title_tag.get_text(strip=True)
-                    price_match = re.search(r'(\d[\d\s\xa0]*)руб', sec_text)
-                    if price_match:
-                        results.append((title, price_match.group(1), main_phone))
-
-            # В) САУНА
-            elif 'сауна' in sec_text or 'баня' in sec_text:
-                price_match = re.search(r'(\d[\d\s\xa0]*)руб', sec_text)
+            # Ищем данные в блоке ПОСЛЕ заголовка H3 (описание и цена)
+            content_parts = []
+            price = "0"
+            
+            # Перебираем все элементы после текущего H3 до следующего H3
+            for sibling in h3.find_next_siblings():
+                if sibling.name == 'h3': break # Дошли до следующего домика - стоп
+                
+                text = sibling.get_text(strip=True)
+                if not text: continue
+                
+                # Добавляем в описание
+                content_parts.append(text)
+                
+                # Ищем цену в текущем элементе
+                # Ищем число перед "рублей" или "руб"
+                price_match = re.search(r'(\d[\d\s\xa0]*)руб', text)
                 if price_match:
-                    results.append(("Сауна", price_match.group(1), main_phone))
+                    # Если в блоке несколько цен (основная и за раскладушку), 
+                    # мы можем либо брать первую, либо создавать доп. записи.
+                    current_price = re.sub(r'[^\d]', '', price_match.group(1))
+                    
+                    # Если это "Дополнительно" или "Раскладушка" - уточняем заголовок
+                    final_title = title
+                    if "дополнительно" in text.lower() or "раскладушка" in text.lower():
+                        final_title = f"{title} (Доп. место)"
+                    
+                    description = " ".join(content_parts)[:1000] # Собираем описание
+                    
+                    # Сохранение в БД
+                    unique_id = f"{URL}#{hash(final_title + current_price)}"
+                    save_to_db(unique_id, final_title, current_price, phone, description)
+                    
+                    print(f"✅ Сохранено: {final_title} -> {current_price} руб.")
+                    count += 1
 
-            # Г) ТРАНСФЕР
-            elif 'трансфер' in sec_text:
-                results.append(("Трансфер", "По запросу (см. телефон)", main_phone))
-
-        # 3. СОХРАНЕНИЕ УНИКАЛЬНЫХ ДАННЫХ
-        final_count = 0
-        seen = set()
-        for res_title, res_price, res_phone in results:
-            # Чистим цену
-            clean_p = re.sub(r'[^\d]', '', str(res_price)) if any(char.isdigit() for char in str(res_price)) else "0"
-            
-            # Чтобы не дублировать
-            entry_id = f"{res_title}_{clean_p}"
-            if entry_id not in seen and len(res_title) < 100:
-                save_to_db(f"{URL}#{hash(entry_id)}", res_title, clean_p, res_phone, res_price)
-                print(f"✅ Сохранено: {res_title} | {clean_p} руб.")
-                seen.add(entry_id)
-                final_count += 1
-
-        print(f"--- ГОТОВО. Сохранено записей: {final_count} ---")
+        print(f"--- ЗАВЕРШЕНО. Сохранено позиций: {count} ---")
 
     except Exception as e:
         print(f"Ошибка: {e}")
 
 if __name__ == "__main__":
-    parse_site()
+    start_precise_parsing()
