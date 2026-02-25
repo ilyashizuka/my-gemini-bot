@@ -12,17 +12,16 @@ TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = os.getenv('ADMIN_ID', '0')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
-# Список ключей (поддерживаем до 3-х штук)
+# Список ключей Gemini для ротации (из переменных окружения)
 GEMINI_KEYS = [
     os.getenv('GEMINI_KEY_1'),
     os.getenv('GEMINI_KEY_2'),
     os.getenv('GEMINI_KEY_3'),
-    os.getenv('GEMINI_API_KEY') # На всякий случай оставляем старую переменную
+    os.getenv('GEMINI_API_KEY')
 ]
-# Очищаем список от пустых значений (None)
-GEMINI_KEYS = [k for k in GEMINI_KEYS if k]
+GEMINI_KEYS = [k for k in GEMINI_KEYS if k] # Очистка от пустых
 
-# Настройка Базы
+# Настройка Базы Данных
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
     'user': 'host1324224',
@@ -32,12 +31,10 @@ DB_CONFIG = {
     'cursorclass': pymysql.cursors.DictCursor
 }
 
-# ИНИЦИАЛИЗАЦИЯ
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# --- ФУНКЦИЯ РОТАЦИИ КЛЮЧЕЙ GEMINI ---
+# --- 1. РОТАЦИЯ КЛЮЧЕЙ GEMINI (ОШИБКА 429) ---
 def get_gemini_response(prompt):
-    """Пытается получить ответ от Gemini, перебирая ключи при ошибке 429."""
     for key in GEMINI_KEYS:
         try:
             genai.configure(api_key=key)
@@ -45,22 +42,38 @@ def get_gemini_response(prompt):
             response = model.generate_content(prompt)
             return response.text
         except exceptions.ResourceExhausted:
-            # Ошибка 429: лимит исчерпан, переходим к следующему ключу
-            continue
+            continue # Пробуем следующий ключ при 429
         except Exception as e:
-            # Другие ошибки (например, сетевые или невалидный ключ)
-            print(f"Ошибка Gemini с ключом {key[:5]}...: {e}")
+            print(f"Ошибка Gemini: {e}")
             continue
-    return None # Если ни один ключ не сработал
+    return None
 
-# --- УМНЫЙ ПОИСК В БАЗЕ ---
+# --- 2. ПОИСК В ТЕКСТОВОМ ФАЙЛЕ (KNOWLEDGE.TXT) ---
+def search_in_knowledge_base(query):
+    query = query.lower()
+    file_path = 'knowledge.txt'
+    if not os.path.exists(file_path):
+        return None
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            parts = content.split('===')
+            for i in range(1, len(parts), 2):
+                keywords_header = parts[i].lower()
+                answer_text = parts[i+1].strip()
+                kw_list = [k.strip() for k in keywords_header.split(',')]
+                if any(kw in query for kw in kw_list if len(kw) > 2):
+                    return answer_text
+    except Exception as e:
+        print(f"Ошибка чтения файла знаний: {e}")
+    return None
+
+# --- 3. ПОИСК В БАЗЕ ДАННЫХ MYSQL ---
 def search_in_db(query):
     stop_words = ['цена', 'стоимость', 'сколько', 'стоит', 'есть', 'базе', 'на']
     q = query.lower().replace('?', '').strip()
     words = [w[:4] for w in q.split() if len(w) >= 3 and w not in stop_words]
-    
     if not words: return []
-
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
@@ -68,7 +81,6 @@ def search_in_db(query):
             params = []
             for w in words:
                 params.extend([f'%{w}%', f'%{w}%'])
-            
             sql = f"SELECT * FROM parsed_content WHERE {conditions} GROUP BY title LIMIT 5"
             cur.execute(sql, params)
             return cur.fetchall()
@@ -76,7 +88,7 @@ def search_in_db(query):
     finally:
         if 'conn' in locals(): conn.close()
 
-# --- ПАРСЕР ---
+# --- 4. ПАРСЕР САЙТА ---
 def run_update():
     url = "https://vuoksa-virta.ru"
     res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
@@ -100,29 +112,35 @@ def run_update():
             conn.commit()
     finally: conn.close()
 
-# --- ОБРАБОТЧИКИ ---
+# --- ОБРАБОТЧИКИ КОМАНД ---
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» готов! Напишите название дома или услуги.")
+    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» готов! Спросите про цены, маршрут или контакты.")
 
 @bot.message_handler(commands=['update'])
 def update_cmd(m):
     if str(m.from_user.id) == str(ADMIN_ID):
-        bot.send_message(m.chat.id, "🧹 Обновляю базу данных...")
+        bot.send_message(m.chat.id, "🧹 Обновляю базу данных из сайта...")
         try:
             run_update()
             bot.send_message(m.chat.id, "✅ База успешно обновлена!")
         except Exception as e:
             bot.send_message(m.chat.id, f"❌ Ошибка: {e}")
-    else:
-        bot.reply_to(m, "У вас нет прав для этой команды.")
+
+# --- ГЛАВНЫЙ ОБРАБОТЧИК ТЕКСТА ---
 
 @bot.message_handler(func=lambda m: True)
 def handle_msg(m):
     text = m.text.lower()
     
-    # 1. Поиск в Базе
+    # ПРИОРИТЕТ 1: Текстовый файл знаний (Маршрут, Контакты)
+    file_answer = search_in_knowledge_base(text)
+    if file_answer:
+        bot.send_message(m.chat.id, file_answer, parse_mode="Markdown", disable_web_page_preview=False)
+        return
+
+    # ПРИОРИТЕТ 2: База данных (Цены на дома/лодки)
     rows = search_in_db(text)
     if rows:
         for r in rows:
@@ -130,20 +148,17 @@ def handle_msg(m):
             bot.send_message(m.chat.id, msg, parse_mode="Markdown")
         return
 
-    # 2. Если в базе нет — Gemini с ротацией ключей
+    # ПРИОРИТЕТ 3: Gemini (если ничего не нашли)
     is_private = m.chat.type == 'private'
     is_mentioned = bot.get_me().username in text
     
-    if GEMINI_KEYS and (is_private or is_mentioned):
+    if (is_private or is_mentioned):
         bot.send_chat_action(m.chat.id, 'typing')
         prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко на вопрос: {m.text}. Телефон: +79219930209."
-        
         answer = get_gemini_response(prompt)
-        
         if answer:
             bot.reply_to(m, answer)
-        # Если answer None, бот просто ничего не ответит (ошибка 429 подавлена)
 
 if __name__ == "__main__":
-    print(f"Бот запущен. Найдено ключей Gemini: {len(GEMINI_KEYS)}")
+    print(f"Бот запущен. Ключей Gemini: {len(GEMINI_KEYS)}")
     bot.infinity_polling()
