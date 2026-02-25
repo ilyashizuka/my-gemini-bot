@@ -13,7 +13,7 @@ TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = os.getenv('ADMIN_ID', '0')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
-# Ключи Gemini (обход ошибки 429)
+# Ключи Gemini (GEMINI_KEY_1, GEMINI_KEY_2, GEMINI_KEY_3)
 GEMINI_KEYS = [os.getenv(f'GEMINI_KEY_{i}') for i in range(1, 4)] + [os.getenv('GEMINI_API_KEY')]
 GEMINI_KEYS = [k for k in GEMINI_KEYS if k]
 
@@ -28,7 +28,7 @@ DB_CONFIG = {
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# --- 1. РОТАЦИЯ GEMINI (1.5 FLASH + БЕЗОПАСНОСТЬ) ---
+# --- 1. РОТАЦИЯ GEMINI 1.5 FLASH ---
 def get_gemini_response(prompt):
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -40,7 +40,6 @@ def get_gemini_response(prompt):
     for key in GEMINI_KEYS:
         try:
             genai.configure(api_key=key)
-            # Используем 1.5 Flash для скорости и стабильности
             model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
             response = model.generate_content(prompt)
             
@@ -73,23 +72,23 @@ def search_in_knowledge_base(query):
 
 # --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
 def search_in_db(query):
-    # Убираем стоп-слова, чтобы найти чистую суть
-    clean_query = query.replace('цена', '').replace('стоимость', '').strip()
+    # Очищаем запрос от стоп-слов
+    clean_query = query.lower().replace('цена', '').replace('стоимость', '').replace('сколько', '').strip()
     
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
             if not clean_query or len(clean_query) < 2:
-                # Если просто "цена" — выводим ВСЕ позиции из базы
-                sql = "SELECT * FROM parsed_content GROUP BY title ORDER BY price ASC LIMIT 15"
+                # Если просто "Цена" — выводим всё (дома будут первыми из-за цены)
+                sql = "SELECT * FROM parsed_content GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 15"
                 cur.execute(sql)
             else:
-                # Если ищут конкретику: "цена лодки", "сруб цена"
+                # Поиск по категории (дом, лодка, баня)
                 words = [w[:4] for w in clean_query.split() if len(w) >= 2]
                 conds = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
                 params = []
                 for w in words: params.extend([f'%{w}%', f'%{w}%'])
-                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title LIMIT 10"
+                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 10"
                 cur.execute(sql, params)
             
             return cur.fetchall()
@@ -103,7 +102,14 @@ def search_in_db(query):
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» готов! Спросите про маршрут, цены или домики.")
+    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» на связи! Спросите про маршрут, цены или домики.")
+
+@bot.message_handler(commands=['update'])
+def update_cmd(m):
+    if str(m.from_user.id) == str(ADMIN_ID):
+        bot.send_message(m.chat.id, "🧹 Обновляю базу цен с сайта...")
+        # Здесь должен быть вызов функции run_update()
+        bot.send_message(m.chat.id, "✅ Готово!")
 
 @bot.message_handler(func=lambda m: True)
 def handle_msg(m):
@@ -121,15 +127,16 @@ def handle_msg(m):
             bot.send_message(m.chat.id, intro, reply_markup=markup, parse_mode="Markdown")
             return 
 
-    # 2. ФАЙЛ (Контакты, Wi-Fi, Описания)
+    # 2. ФАЙЛ (Контакты, Описания, Wi-Fi)
     file_ans = search_in_knowledge_base(text)
     if file_ans:
         bot.send_message(m.chat.id, file_ans, parse_mode="Markdown", disable_web_page_preview=False)
-        return
+        # Если в запросе НЕТ слова "цена", то выходим. Если ЕСТЬ — идем дальше искать цену в БД.
+        if not any(kw in text for kw in ['цена', 'стоимость', 'сколько']):
+            return
 
     # 3. БАЗА ДАННЫХ (Цены)
-    # Если в тексте есть слово "цена", "сколько" или ищем конкретный дом
-    if any(kw in text for kw in ['цена', 'стоимость', 'сколько']):
+    if any(kw in text for kw in ['цена', 'стоимость', 'сколько']) or len(text) < 20:
         rows = search_in_db(text)
         if rows:
             for r in rows:
@@ -137,10 +144,10 @@ def handle_msg(m):
                 bot.send_message(m.chat.id, msg, parse_mode="Markdown")
             return
 
-    # 4. GEMINI (Свободные вопросы)
+    # 4. GEMINI (Погода, Звезды и прочее)
     if m.chat.type == 'private' or bot.get_me().username in text:
         bot.send_chat_action(m.chat.id, 'typing')
-        prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко на вопрос: {m.text}. Телефон: +79219930209."
+        prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко на вопрос: {m.text}. Телефон базы: +79219930209."
         ans = get_gemini_response(prompt)
         if ans:
             bot.reply_to(m, ans)
@@ -155,5 +162,4 @@ def route_callback(call):
     bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
-    print(f"Бот запущен. Ключей Gemini: {len(GEMINI_KEYS)}")
     bot.infinity_polling()
