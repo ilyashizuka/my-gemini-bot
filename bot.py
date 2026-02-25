@@ -13,7 +13,7 @@ TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = os.getenv('ADMIN_ID', '0')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
-# Ключи Gemini (GEMINI_KEY_1, GEMINI_KEY_2, GEMINI_KEY_3)
+# Ключи Gemini (обход ошибки 429)
 GEMINI_KEYS = [os.getenv(f'GEMINI_KEY_{i}') for i in range(1, 4)] + [os.getenv('GEMINI_API_KEY')]
 GEMINI_KEYS = [k for k in GEMINI_KEYS if k]
 
@@ -37,7 +37,7 @@ def get_gemini_response(prompt):
             response = model.generate_content(prompt)
             return response.text
         except exceptions.ResourceExhausted:
-            continue # Ошибка 429 - пробуем следующий ключ
+            continue 
         except Exception as e:
             print(f"Ошибка Gemini: {e}")
             continue
@@ -54,6 +54,7 @@ def search_in_knowledge_base(query):
                 header = parts[i].lower()
                 content = parts[i+1].strip()
                 keywords = [k.strip() for k in header.split(',')]
+                # Ищем точное совпадение метки или вхождение слова
                 if any(kw in query for kw in keywords if len(kw) > 2):
                     return content
     except: return None
@@ -61,7 +62,6 @@ def search_in_knowledge_base(query):
 
 # --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
 def search_in_db(query):
-    # Если в запросе только слово "цена", ищем общее слово "дом"
     clean_query = query.replace('цена', '').strip()
     search_term = clean_query if clean_query else "дом"
     words = [w[:4] for w in search_term.split() if len(w) >= 3]
@@ -83,7 +83,7 @@ def search_in_db(query):
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» на связи! Спросите про маршрут, цены или домики.")
+    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» готов! Спросите про маршрут, цены или домики.")
 
 @bot.message_handler(func=lambda m: True)
 def handle_msg(m):
@@ -92,23 +92,23 @@ def handle_msg(m):
     # 1. ОБРАБОТКА МАРШРУТА (С КНОПКАМИ)
     if any(kw in text for kw in ['маршрут', 'доехать', 'добраться']):
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="route_auto"))
-        markup.add(types.InlineKeyboardButton("🚌 На автобусе", callback_data="route_bus"))
-        markup.add(types.InlineKeyboardButton("🚉 Электричка", callback_data="route_elec"))
+        markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="btn_auto"))
+        markup.add(types.InlineKeyboardButton("🚌 На автобусе", callback_data="btn_bus"))
+        markup.add(types.InlineKeyboardButton("🚉 Электричка", callback_data="btn_elec"))
         
-        # Берем вводный текст про Андрея из файла
-        intro = search_in_knowledge_base("маршрут")
+        # Ищем строго по метке ИНФО_МАРШРУТ
+        intro = search_in_knowledge_base("инфо_маршрут")
         if intro:
             bot.send_message(m.chat.id, intro, reply_markup=markup, parse_mode="Markdown")
-            return # ВАЖНО: Останавливаем поиск, чтобы не дублировать ответ!
+            return 
 
-    # 2. ПОИСК В ФАЙЛЕ (Правила, Wi-Fi, Контакты, Дома)
+    # 2. ПОИСК В ФАЙЛЕ (Контакты, Wi-Fi, Описания домов)
     file_ans = search_in_knowledge_base(text)
     if file_ans:
         bot.send_message(m.chat.id, file_ans, parse_mode="Markdown", disable_web_page_preview=False)
         return
 
-    # 3. ПОИСК В БАЗЕ ДАННЫХ (Цены из парсера)
+    # 3. ПОИСК В БАЗЕ ДАННЫХ (Цены)
     rows = search_in_db(text)
     if rows:
         for r in rows:
@@ -116,7 +116,7 @@ def handle_msg(m):
             bot.send_message(m.chat.id, msg, parse_mode="Markdown")
         return
 
-    # 4. РЕЗЕРВ: GEMINI (Для свободных вопросов)
+    # 4. РЕЗЕРВ: GEMINI
     is_private = m.chat.type == 'private'
     is_mentioned = bot.get_me().username in text
     
@@ -127,15 +127,14 @@ def handle_msg(m):
         if ans:
             bot.reply_to(m, ans)
 
-# ОБРАБОТКА НАЖАТИЙ НА КНОПКИ МАРШРУТА
-@bot.callback_query_handler(func=lambda call: call.data.startswith('route_'))
+# ОБРАБОТКА НАЖАТИЙ НА КНОПКИ (УНИКАЛЬНЫЕ МЕТКИ ДЕТАЛИ_)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('btn_'))
 def route_callback(call):
     mapping = {
-        "route_auto": "маршрут_авто", 
-        "route_bus": "маршрут_автобус", 
-        "route_elec": "маршрут_электричка"
+        "btn_auto": "детали_авто", 
+        "btn_bus": "детали_автобус", 
+        "btn_elec": "детали_электричка"
     }
-    # Ищем детальную инструкцию в файле по ключу
     detail_msg = search_in_knowledge_base(mapping.get(call.data))
     if detail_msg:
         bot.send_message(call.message.chat.id, detail_msg, parse_mode="Markdown", disable_web_page_preview=False)
@@ -143,5 +142,5 @@ def route_callback(call):
     bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
-    print(f"Бот запущен. Найдено ключей Gemini: {len(GEMINI_KEYS)}")
+    print(f"Бот запущен. Ключей Gemini: {len(GEMINI_KEYS)}")
     bot.infinity_polling()
