@@ -28,20 +28,32 @@ DB_CONFIG = {
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# --- 1. РОТАЦИЯ КЛЮЧЕЙ GEMINI ---
+# --- 1. РОТАЦИЯ GEMINI (1.5 FLASH + БЕЗОПАСНОСТЬ) ---
 def get_gemini_response(prompt):
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
     for key in GEMINI_KEYS:
         try:
             genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-pro')
+            # Используем 1.5 Flash для скорости и стабильности
+            model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
             response = model.generate_content(prompt)
+            
+            if response.candidates and response.candidates[0].finish_reason == 3:
+                continue # Заблокировано Google, пробуем другой ключ
+                
             return response.text
         except exceptions.ResourceExhausted:
-            continue 
+            continue # Ошибка 429
         except Exception as e:
-            print(f"Ошибка Gemini: {e}")
+            print(f"Ошибка Gemini (ключ {key[:5]}): {e}")
             continue
-    return None
+    return "Извините, сейчас я не могу ответить. Попробуйте позже."
 
 # --- 2. ПОИСК В ФАЙЛЕ KNOWLEDGE.TXT ---
 def search_in_knowledge_base(query):
@@ -54,7 +66,6 @@ def search_in_knowledge_base(query):
                 header = parts[i].lower()
                 content = parts[i+1].strip()
                 keywords = [k.strip() for k in header.split(',')]
-                # Ищем точное совпадение метки или вхождение слова
                 if any(kw in query for kw in keywords if len(kw) > 2):
                     return content
     except: return None
@@ -62,20 +73,29 @@ def search_in_knowledge_base(query):
 
 # --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
 def search_in_db(query):
-    clean_query = query.replace('цена', '').strip()
-    search_term = clean_query if clean_query else "дом"
-    words = [w[:4] for w in search_term.split() if len(w) >= 3]
+    # Убираем стоп-слова, чтобы найти чистую суть
+    clean_query = query.replace('цена', '').replace('стоимость', '').strip()
     
-    if not words: return []
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
-            conds = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
-            params = []
-            for w in words: params.extend([f'%{w}%', f'%{w}%'])
-            cur.execute(f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title LIMIT 5", params)
+            if not clean_query or len(clean_query) < 2:
+                # Если просто "цена" — выводим ВСЕ позиции из базы
+                sql = "SELECT * FROM parsed_content GROUP BY title ORDER BY price ASC LIMIT 15"
+                cur.execute(sql)
+            else:
+                # Если ищут конкретику: "цена лодки", "сруб цена"
+                words = [w[:4] for w in clean_query.split() if len(w) >= 2]
+                conds = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
+                params = []
+                for w in words: params.extend([f'%{w}%', f'%{w}%'])
+                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title LIMIT 10"
+                cur.execute(sql, params)
+            
             return cur.fetchall()
-    except: return []
+    except Exception as e:
+        print(f"Ошибка БД: {e}")
+        return []
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -89,56 +109,49 @@ def start(m):
 def handle_msg(m):
     text = m.text.lower()
     
-    # 1. ОБРАБОТКА МАРШРУТА (С КНОПКАМИ)
+    # 1. МАРШРУТ (КНОПКИ)
     if any(kw in text for kw in ['маршрут', 'доехать', 'добраться']):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="btn_auto"))
         markup.add(types.InlineKeyboardButton("🚌 На автобусе", callback_data="btn_bus"))
         markup.add(types.InlineKeyboardButton("🚉 Электричка", callback_data="btn_elec"))
         
-        # Ищем строго по метке ИНФО_МАРШРУТ
         intro = search_in_knowledge_base("инфо_маршрут")
         if intro:
             bot.send_message(m.chat.id, intro, reply_markup=markup, parse_mode="Markdown")
             return 
 
-    # 2. ПОИСК В ФАЙЛЕ (Контакты, Wi-Fi, Описания домов)
+    # 2. ФАЙЛ (Контакты, Wi-Fi, Описания)
     file_ans = search_in_knowledge_base(text)
     if file_ans:
         bot.send_message(m.chat.id, file_ans, parse_mode="Markdown", disable_web_page_preview=False)
         return
 
-    # 3. ПОИСК В БАЗЕ ДАННЫХ (Цены)
-    rows = search_in_db(text)
-    if rows:
-        for r in rows:
-            msg = f"🏠 *{r['title']}*\n💰 Цена: {r['price']} руб.\n📞 {r['phone']}\n\n_{r['content'][:250]}_"
-            bot.send_message(m.chat.id, msg, parse_mode="Markdown")
-        return
+    # 3. БАЗА ДАННЫХ (Цены)
+    # Если в тексте есть слово "цена", "сколько" или ищем конкретный дом
+    if any(kw in text for kw in ['цена', 'стоимость', 'сколько']):
+        rows = search_in_db(text)
+        if rows:
+            for r in rows:
+                msg = f"🏠 *{r['title']}*\n💰 Цена: {r['price']} руб.\n📞 {r['phone']}\n\n_{r['content'][:250]}_"
+                bot.send_message(m.chat.id, msg, parse_mode="Markdown")
+            return
 
-    # 4. РЕЗЕРВ: GEMINI
-    is_private = m.chat.type == 'private'
-    is_mentioned = bot.get_me().username in text
-    
-    if (is_private or is_mentioned):
+    # 4. GEMINI (Свободные вопросы)
+    if m.chat.type == 'private' or bot.get_me().username in text:
         bot.send_chat_action(m.chat.id, 'typing')
         prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко на вопрос: {m.text}. Телефон: +79219930209."
         ans = get_gemini_response(prompt)
         if ans:
             bot.reply_to(m, ans)
 
-# ОБРАБОТКА НАЖАТИЙ НА КНОПКИ (УНИКАЛЬНЫЕ МЕТКИ ДЕТАЛИ_)
+# ОБРАБОТКА КНОПОК
 @bot.callback_query_handler(func=lambda call: call.data.startswith('btn_'))
 def route_callback(call):
-    mapping = {
-        "btn_auto": "детали_авто", 
-        "btn_bus": "детали_автобус", 
-        "btn_elec": "детали_электричка"
-    }
-    detail_msg = search_in_knowledge_base(mapping.get(call.data))
-    if detail_msg:
-        bot.send_message(call.message.chat.id, detail_msg, parse_mode="Markdown", disable_web_page_preview=False)
-    
+    mapping = {"btn_auto": "детали_авто", "btn_bus": "детали_автобус", "btn_elec": "детали_электричка"}
+    detail = search_in_knowledge_base(mapping.get(call.data))
+    if detail:
+        bot.send_message(call.message.chat.id, detail, parse_mode="Markdown", disable_web_page_preview=False)
     bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
