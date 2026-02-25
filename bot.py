@@ -5,20 +5,22 @@ import re
 import requests
 import google.generativeai as genai
 from bs4 import BeautifulSoup
+from google.api_core import exceptions
 
 # --- НАСТРОЙКИ ---
 TOKEN = os.getenv('BOT_TOKEN')
-GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 ADMIN_ID = os.getenv('ADMIN_ID', '0')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
-# Настройка Gemini
-if GEMINI_KEY:
-    try:
-        genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel('gemini-pro')
-    except: model = None
-else: model = None
+# Список ключей (поддерживаем до 3-х штук)
+GEMINI_KEYS = [
+    os.getenv('GEMINI_KEY_1'),
+    os.getenv('GEMINI_KEY_2'),
+    os.getenv('GEMINI_KEY_3'),
+    os.getenv('GEMINI_API_KEY') # На всякий случай оставляем старую переменную
+]
+# Очищаем список от пустых значений (None)
+GEMINI_KEYS = [k for k in GEMINI_KEYS if k]
 
 # Настройка Базы
 DB_CONFIG = {
@@ -30,8 +32,26 @@ DB_CONFIG = {
     'cursorclass': pymysql.cursors.DictCursor
 }
 
-# ИНИЦИАЛИЗАЦИЯ (threaded=False важен для групп)
+# ИНИЦИАЛИЗАЦИЯ
 bot = telebot.TeleBot(TOKEN, threaded=False)
+
+# --- ФУНКЦИЯ РОТАЦИИ КЛЮЧЕЙ GEMINI ---
+def get_gemini_response(prompt):
+    """Пытается получить ответ от Gemini, перебирая ключи при ошибке 429."""
+    for key in GEMINI_KEYS:
+        try:
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel('gemini-pro')
+            response = model.generate_content(prompt)
+            return response.text
+        except exceptions.ResourceExhausted:
+            # Ошибка 429: лимит исчерпан, переходим к следующему ключу
+            continue
+        except Exception as e:
+            # Другие ошибки (например, сетевые или невалидный ключ)
+            print(f"Ошибка Gemini с ключом {key[:5]}...: {e}")
+            continue
+    return None # Если ни один ключ не сработал
 
 # --- УМНЫЙ ПОИСК В БАЗЕ ---
 def search_in_db(query):
@@ -44,7 +64,6 @@ def search_in_db(query):
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
-            # Ищем совпадения по всем корням слов (AND)
             conditions = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
             params = []
             for w in words:
@@ -57,7 +76,7 @@ def search_in_db(query):
     finally:
         if 'conn' in locals(): conn.close()
 
-# --- ПАРСЕР (ВНУТРИ) ---
+# --- ПАРСЕР ---
 def run_update():
     url = "https://vuoksa-virta.ru"
     res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
@@ -66,7 +85,6 @@ def run_update():
     try:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE `parsed_content` ")
-            # Собираем H3 (Дома)
             for h3 in soup.find_all('h3'):
                 title = re.sub(r'^[а-я]\s+', '', h3.get_text(strip=True), flags=re.IGNORECASE).strip(': ')
                 if any(x in title.lower() for x in ['меню', 'навигация', 'лодки']): continue
@@ -86,7 +104,7 @@ def run_update():
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» готов! Просто напишите название дома или услуги (например, 'лодка' или 'Пятёрочка'), и я пришлю цену.")
+    bot.send_message(m.chat.id, "Бот базы «Вуокса-Вирта» готов! Напишите название дома или услуги.")
 
 @bot.message_handler(commands=['update'])
 def update_cmd(m):
@@ -104,7 +122,7 @@ def update_cmd(m):
 def handle_msg(m):
     text = m.text.lower()
     
-    # 1. Поиск в Базе (Бесплатно и точно)
+    # 1. Поиск в Базе
     rows = search_in_db(text)
     if rows:
         for r in rows:
@@ -112,19 +130,20 @@ def handle_msg(m):
             bot.send_message(m.chat.id, msg, parse_mode="Markdown")
         return
 
-    # 2. Если в базе нет — Gemini (только для личных чатов или при упоминании в группе)
-    # В группе бот не будет отвечать нейросетью на каждое сообщение, чтобы не спамить.
+    # 2. Если в базе нет — Gemini с ротацией ключей
     is_private = m.chat.type == 'private'
     is_mentioned = bot.get_me().username in text
     
-    if model and (is_private or is_mentioned):
+    if GEMINI_KEYS and (is_private or is_mentioned):
         bot.send_chat_action(m.chat.id, 'typing')
-        try:
-            prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко на вопрос: {m.text}. Телефон: +79219930209."
-            res = model.generate_content(prompt)
-            bot.reply_to(m, res.text)
-        except: pass
+        prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко на вопрос: {m.text}. Телефон: +79219930209."
+        
+        answer = get_gemini_response(prompt)
+        
+        if answer:
+            bot.reply_to(m, answer)
+        # Если answer None, бот просто ничего не ответит (ошибка 429 подавлена)
 
 if __name__ == "__main__":
-    print("Бот Вуокса-Вирта запущен (режим без кнопок)...")
+    print(f"Бот запущен. Найдено ключей Gemini: {len(GEMINI_KEYS)}")
     bot.infinity_polling()
