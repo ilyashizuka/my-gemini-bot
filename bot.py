@@ -199,4 +199,5 @@ def route_callback(call):
 
 if __name__ == "__main__":
     print("✅ БОТ ПОЛНОСТЬЮ ЗАПУЩЕН И ГОТОВ К РАБОТЕ")
+    bot.remove_webhook() # Добавь эту строку, она сбросит старые соединения
     bot.infinity_polling()
