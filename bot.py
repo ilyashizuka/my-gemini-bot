@@ -1,3 +1,10 @@
+import os
+import sys
+# Принудительно выводим логи сразу в консоль Render
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+print("🚀 БОТ ЗАПУСКАЕТСЯ...") 
 import telebot
 import pymysql
 import os
@@ -15,89 +22,26 @@ DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
 # --- ПРОВЕРКА КЛЮЧЕЙ ПРИ ЗАПУСКЕ ---
 GEMINI_KEYS = []
+print("🔍 Начинаю поиск ключей...", flush=True)
+
 for i in range(1, 4):
     key = os.getenv(f'GEMINI_KEY_{i}')
     if key:
-        GEMINI_KEYS.append(key.strip()) # strip() уберет лишние пробелы, если они есть
+        k_clean = key.strip()
+        GEMINI_KEYS.append(k_clean)
+        print(f"✅ Нашел GEMINI_KEY_{i}: {k_clean[:5]}*** (длина {len(k_clean)})", flush=True)
 
-# Проверяем основной ключ, если он задан отдельно
 extra_key = os.getenv('GEMINI_API_KEY')
 if extra_key:
     GEMINI_KEYS.append(extra_key.strip())
+    print("✅ Нашел GEMINI_API_KEY", flush=True)
 
-# Убираем дубликаты, если вдруг ключи совпали
 GEMINI_KEYS = list(set(GEMINI_KEYS))
 
-print(f"--- СТАТУС GEMINI ---")
-print(f"✅ Найдено рабочих ключей в Render: {len(GEMINI_KEYS)}")
-if len(GEMINI_KEYS) == 0:
-    print("❌ ОШИБКА: Боту не переданы ключи! Проверь Environment Variables на Render.")
-print(f"---------------------")
+print(f"📊 ИТОГО: {len(GEMINI_KEYS)} уникальных ключей загружено.", flush=True)
 
-DB_CONFIG = {
-    'host': 'mysql9.hostland.ru', 
-    'user': 'host1324224', 
-    'password': DB_PASSWORD,
-    'database': 'host1324224_botanik', 
-    'charset': 'utf8mb4', 
-    'cursorclass': pymysql.cursors.DictCursor
-}
-
-bot = telebot.TeleBot(TOKEN, threaded=False)
-
-# --- 1. РОТАЦИЯ GEMINI 1.5 FLASH ---
-def get_gemini_response(prompt):
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-
-    for i, key in enumerate(GEMINI_KEYS):
-        try:
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
-            response = model.generate_content(prompt)
-            
-            if response and response.candidates:
-                return response.text
-            print(f"⚠️ Ключ {i+1}: Пустой ответ.")
-            continue
-        except exceptions.ResourceExhausted:
-            print(f"🛑 Ключ {i+1}: Лимит 429.")
-            continue
-        except Exception as e:
-            print(f"❌ Ключ {i+1}: Ошибка {e}")
-            continue
-            
-    return "Извините, сейчас я не могу ответить. Попробуйте позже."
-
-# --- 2. ПОИСК В ФАЙЛЕ KNOWLEDGE.TXT ---
-def search_in_knowledge_base(query):
-    query = query.lower().strip()
-    if not os.path.exists('knowledge.txt'): return None
-    try:
-        with open('knowledge.txt', 'r', encoding='utf-8') as f:
-            parts = f.read().split('===')
-            
-            # 1. Сначала ищем точное совпадение заголовка
-            for i in range(1, len(parts), 2):
-                header = parts[i].lower()
-                content = parts[i+1].strip()
-                keywords = [k.strip() for k in header.split(',')]
-                if query in keywords:
-                    return content
-            
-            # 2. Если не нашли, ищем частичное вхождение
-            for i in range(1, len(parts), 2):
-                header = parts[i].lower()
-                content = parts[i+1].strip()
-                keywords = [k.strip() for k in header.split(',')]
-                if any(kw in query for kw in keywords if len(kw) > 2):
-                    return content
-    except: return None
-    return None
+if not GEMINI_KEYS:
+    print("❌ ОШИБКА: Ключи не найдены в настройках Render!", flush=True)
 
 # --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
 def search_in_db(query):
