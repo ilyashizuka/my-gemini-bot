@@ -13,9 +13,26 @@ TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = os.getenv('ADMIN_ID', '0')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '807bba4c')
 
-# Ключи Gemini
-GEMINI_KEYS = [os.getenv(f'GEMINI_KEY_{i}') for i in range(1, 4)] + [os.getenv('GEMINI_API_KEY')]
-GEMINI_KEYS = [k for k in GEMINI_KEYS if k]
+# --- ПРОВЕРКА КЛЮЧЕЙ ПРИ ЗАПУСКЕ ---
+GEMINI_KEYS = []
+for i in range(1, 4):
+    key = os.getenv(f'GEMINI_KEY_{i}')
+    if key:
+        GEMINI_KEYS.append(key.strip()) # strip() уберет лишние пробелы, если они есть
+
+# Проверяем основной ключ, если он задан отдельно
+extra_key = os.getenv('GEMINI_API_KEY')
+if extra_key:
+    GEMINI_KEYS.append(extra_key.strip())
+
+# Убираем дубликаты, если вдруг ключи совпали
+GEMINI_KEYS = list(set(GEMINI_KEYS))
+
+print(f"--- СТАТУС GEMINI ---")
+print(f"✅ Найдено рабочих ключей в Render: {len(GEMINI_KEYS)}")
+if len(GEMINI_KEYS) == 0:
+    print("❌ ОШИБКА: Боту не переданы ключи! Проверь Environment Variables на Render.")
+print(f"---------------------")
 
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru', 
