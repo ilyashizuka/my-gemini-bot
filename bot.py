@@ -30,6 +30,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # --- 1. РОТАЦИЯ GEMINI 1.5 FLASH ---
 def get_gemini_response(prompt):
+    # Настройки безопасности
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -43,20 +44,22 @@ def get_gemini_response(prompt):
             model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
             response = model.generate_content(prompt)
             
-            if not response.candidates:
-                print(f"⚠️ Ключ {i+1}: Пустой ответ (фильтры)")
-                continue
-                
-            return response.text
+            # Проверяем, есть ли ответ в объекте
+            if response and response.candidates:
+                return response.text
+            
+            print(f"⚠️ Ключ {i+1}: Пустой ответ или блок безопасности.")
+            continue
+            
         except exceptions.ResourceExhausted:
-            print(f"🛑 Ключ {i+1}: Лимит исчерпан (429)")
+            print(f"🛑 Ключ {i+1}: Лимит 429 исчерпан.")
             continue
         except Exception as e:
-            print(f"❌ Ключ {i+1}: Ошибка {e}")
+            print(f"❌ Ключ {i+1}: Ошибка: {e}")
             continue
             
     return "Извините, сейчас я не могу ответить. Попробуйте позже."
-
+    
 # --- 2. ПОИСК В ФАЙЛЕ KNOWLEDGE.TXT ---
 def search_in_knowledge_base(query):
     query = query.lower().strip()
