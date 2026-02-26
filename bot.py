@@ -64,7 +64,7 @@ def get_gemini_response(prompt):
     for i, key in enumerate(GEMINI_KEYS):
         try:
             genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+            model = genai.GenerativeModel('models/gemini-1.5-flash', safety_settings=safety_settings)
             response = model.generate_content(prompt)
             
             if response and response.candidates:
