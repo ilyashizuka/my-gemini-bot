@@ -159,12 +159,29 @@ def handle_msg(m):
             return
 
     # 4. GEMINI (Погода, Звезды и прочее)
-    if m.chat.type == 'private' or bot.get_me().username in text:
+     if m.chat.type == 'private' or bot.get_me().username in text:
         bot.send_chat_action(m.chat.id, 'typing')
-        prompt = f"Ты помощник базы 'Вуокса-Вирта'. Ответь кратко на вопрос: {m.text}. Телефон базы: +79219930209."
-        ans = get_gemini_response(prompt)
+        
+        # Читаем базу знаний, чтобы нейросеть была в курсе правил базы
+        base_info = ""
+        if os.path.exists('knowledge.txt'):
+            with open('knowledge.txt', 'r', encoding='utf-8') as f:
+                # Берем первые 2000 символов, чтобы не перегружать запрос
+                base_info = f.read()[:2000] 
+
+        # Формируем расширенную инструкцию для нейросети
+        full_prompt = (
+            f"Ты — дружелюбный помощник базы отдыха 'Вуокса-Вирта'.\n"
+            f"Используй эту информацию при ответе: {base_info}\n"
+            f"Телефон базы: +79219930209.\n"
+            f"Вопрос пользователя: {m.text}\n"
+            f"Отвечай кратко, вежливо и только на русском языке."
+        )
+        
+        ans = get_gemini_response(full_prompt)
         if ans:
             bot.reply_to(m, ans)
+
 
 # ОБРАБОТКА КНОПОК
 @bot.callback_query_handler(func=lambda call: call.data.startswith('btn_'))
