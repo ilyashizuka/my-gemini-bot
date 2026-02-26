@@ -56,11 +56,24 @@ def get_gemini_response(prompt):
 
 # --- 2. ПОИСК В ФАЙЛЕ KNOWLEDGE.TXT ---
 def search_in_knowledge_base(query):
-    query = query.lower()
+    query = query.lower().strip()
     if not os.path.exists('knowledge.txt'): return None
     try:
         with open('knowledge.txt', 'r', encoding='utf-8') as f:
+            # Разделяем файл по разделителю ===
             parts = f.read().split('===')
+            
+            # Сначала ищем точное совпадение (чтобы "авто" не путалось с "автобус")
+            for i in range(1, len(parts), 2):
+                header = parts[i].lower()
+                content = parts[i+1].strip()
+                keywords = [k.strip() for k in header.split(',')]
+                
+                # Если ищем по кнопке (целый заголовок), проверяем точное совпадение
+                if query in keywords:
+                    return content
+            
+            # Если точного совпадения нет, ищем вхождение (для обычных сообщений)
             for i in range(1, len(parts), 2):
                 header = parts[i].lower()
                 content = parts[i+1].strip()
@@ -69,6 +82,7 @@ def search_in_knowledge_base(query):
                     return content
     except: return None
     return None
+
 
 # --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
 def search_in_db(query):
