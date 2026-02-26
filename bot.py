@@ -30,30 +30,35 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # --- 1. РОТАЦИЯ GEMINI 1.5 FLASH ---
 def get_gemini_response(prompt):
-    safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}, # Добавьте это
-]
+    # Если ключи не загрузились из окружения
+    if not GEMINI_KEYS:
+        print("❌ ОШИБКА: Список GEMINI_KEYS пуст! Проверьте переменные окружения.")
+        return "Ошибка конфигурации ключей."
 
-    for key in GEMINI_KEYS:
+    for i, key in enumerate(GEMINI_KEYS):
         try:
             genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content(prompt)
             
-            if response.candidates and response.candidates[0].finish_reason == 3:
-                continue # Заблокировано Google, пробуем другой ключ
+            # Проверка: не заблокирован ли ответ фильтрами
+            if not response.candidates:
+                print(f"⚠️ Ключ {i+1}: Пустой ответ (возможно, блок цензуры)")
+                continue
                 
             return response.text
+
         except exceptions.ResourceExhausted:
-            continue # Ошибка 429
-        except Exception as e:
-            print(f"Ошибка Gemini (ключ {key[:5]}): {e}")
+            print(f"🛑 Ключ {i+1}: Превышен лимит (429). Пробую следующий...")
             continue
-    return "Извините, сейчас я не могу ответить. Попробуйте позже."
+        except exceptions.InvalidArgument:
+            print(f"❌ Ключ {i+1}: Неверный API-ключ! Проверьте его.")
+            continue
+        except Exception as e:
+            print(f"❓ Ключ {i+1}: Неизвестная ошибка: {e}")
+            continue
+            
+    return "Извините, все линии заняты. Попробуйте позже."
 
 # --- 2. ПОИСК В ФАЙЛЕ KNOWLEDGE.TXT ---
 def search_in_knowledge_base(query):
