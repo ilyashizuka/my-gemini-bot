@@ -103,14 +103,17 @@ def handle_msg(m):
                 bot.send_message(m.chat.id, f"🏠 *{r['title']}*\n{price_line}\n\n{r['content']}", parse_mode="Markdown")
             return
 
-    # GEMINI (Если ничего не нашли)
-    if m.chat.type == 'private' or (bot.get_me().username in text):
+        # 3. GEMINI (Если ничего не нашли в файле и БД)
+    # Отправляем только голый запрос пользователя, чтобы сберечь лимиты ключей
+    if m.chat.type == 'private' or (bot.get_me().username and bot.get_me().username in text):
         bot.send_chat_action(m.chat.id, 'typing')
-        base_info = ""
-        if os.path.exists('knowledge.txt'):
-            with open('knowledge.txt', 'r', encoding='utf-8') as f: base_info = f.read()[:2000]
-        ans = get_gemini_response(f"Инфо: {base_info}\nВопрос: {m.text}. Отвечай кратко.")
-        bot.reply_to(m, ans)
+        
+        # Формируем минимальный промпт БЕЗ подгрузки файла
+        simple_prompt = f"Ты помощник базы отдыха 'Вуокса-Вирта'. Кратко ответь на вопрос: {m.text}"
+        
+        ans = get_gemini_response(simple_prompt)
+        if ans:
+            bot.reply_to(m, ans)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('btn_'))
 def route_callback(call):
