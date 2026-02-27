@@ -106,50 +106,61 @@ def search_in_knowledge_base(query):
     except: return None
     return None
 
-# --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
+# --- 3. УНИВЕРСАЛЬНЫЙ ПОИСК (ФАЙЛ + БД) ---
 def search_in_db(query):
-    # Очистка запроса и подготовка корня слова для лучшего поиска
-    clean_query = query.lower().replace('цена', '').replace('стоимость', '').replace('сколько', '').strip()
-    
+    # Подготовка поискового запроса (берем корень слова)
+    clean_query = query.lower().replace('цена', '').replace('стоимость', '').strip()
+    search_term = clean_query[:4] if len(clean_query) >= 2 else clean_query
+
+    results = []
+
+    # 1. ПОИСК В ТЕКСТОВОМ ФАЙЛЕ (Приоритетный)
+    try:
+        # Укажите точное название вашего файла вместо 'data.txt'
+        with open('your_file.txt', 'r', encoding='utf-8') as f:
+            content = f.read()
+            # Разбиваем файл на разделы (обычно разделы разделены пустой строкой)
+            sections = content.split('\n\n')
+            
+            for section in sections:
+                if search_term in section.lower():
+                    # Логика замены 0 на "Цена договорная" прямо в тексте раздела
+                    # Ищем " 0 " или ": 0" или " 0 руб"
+                    import re
+                    processed_text = re.sub(r'[:\s]0(\s|руб|$)', ' Цена договорная ', section)
+                    
+                    # Формируем структуру, которую ожидает ваш бот (id, title, content, price)
+                    results.append((999, "Информация", processed_text, "0"))
+    except Exception as e:
+        print(f"Ошибка чтения файла: {e}")
+
+    # 2. ПОИСК В БАЗЕ ДАННЫХ (Если в файле мало результатов или нужно дополнить)
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
-            if not clean_query or len(clean_query) < 2:
-                sql = "SELECT * FROM parsed_content GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 15"
-                cur.execute(sql)
-            else:
-                # Берем первые 4 буквы каждого слова для поиска (морфология)
-                words = [w[:4] for w in clean_query.split() if len(w) >= 2]
+            words = [w[:4] for w in clean_query.split() if len(w) >= 2]
+            if words:
                 conds = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
                 params = []
                 for w in words: params.extend([f'%{w}%', f'%{w}%'])
                 
-                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 10"
+                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title LIMIT 10"
                 cur.execute(sql, params)
-            
-            rows = cur.fetchall()
-            
-            # Логика замены 0 на "Цена договорная"
-            final_results = []
-            for row in rows:
-                # Превращаем кортеж в список для редактирования
-                row_list = list(row)
+                db_rows = cur.fetchall()
                 
-                # Проходим по всем элементам строки (обычно цена — это последний или предпоследний столбец)
-                for i, value in enumerate(row_list):
-                    # Если значение равно 0 (число или строка), меняем на текст
-                    if str(value).strip() == "0" or value == 0:
-                        row_list[i] = "Цена договорная"
-                
-                final_results.append(tuple(row_list))
-                
-            return final_results
-            
+                # Обработка 0 для данных из БД
+                for row in db_rows:
+                    row_list = list(row)
+                    for i, val in enumerate(row_list):
+                        if str(val).strip() == "0" or val == 0:
+                            row_list[i] = "Цена договорная"
+                    results.append(tuple(row_list))
     except Exception as e:
         print(f"Ошибка БД: {e}")
-        return []
     finally:
         if 'conn' in locals(): conn.close()
+
+    return results
 
 # --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
 
