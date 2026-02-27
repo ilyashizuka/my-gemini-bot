@@ -106,33 +106,50 @@ def search_in_knowledge_base(query):
     except: return None
     return None
 
-# --- 3. УНИВЕРСАЛЬНЫЙ ПОИСК (ФАЙЛ + БД) ---
+# --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
 def search_in_db(query):
-    # Подготовка поискового запроса (берем корень слова)
-    clean_query = query.lower().replace('цена', '').replace('стоимость', '').strip()
-    search_term = clean_query[:4] if len(clean_query) >= 2 else clean_query
-
-    results = []
-
-    # 1. ПОИСК В ТЕКСТОВОМ ФАЙЛЕ (Приоритетный)
+    # Очищаем запрос от лишних слов
+    clean_query = query.lower().replace('цена', '').replace('стоимость', '').replace('сколько', '').strip()
+    
     try:
-        # Укажите точное название вашего файла вместо 'data.txt'
-        with open('your_file.txt', 'r', encoding='utf-8') as f:
-            content = f.read()
-            # Разбиваем файл на разделы (обычно разделы разделены пустой строкой)
-            sections = content.split('\n\n')
+        conn = pymysql.connect(**DB_CONFIG)
+        with conn.cursor() as cur:
+            if not clean_query or len(clean_query) < 2:
+                sql = "SELECT * FROM parsed_content GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 15"
+                cur.execute(sql)
+            else:
+                # Поиск по корню слова (первые 4 буквы), чтобы находить "трансфер", "скидка" и т.д.
+                words = [w[:4] for w in clean_query.split() if len(w) >= 2]
+                conds = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
+                params = []
+                for w in words: params.extend([f'%{w}%', f'%{w}%'])
+                
+                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 10"
+                cur.execute(sql, params)
             
-            for section in sections:
-                if search_term in section.lower():
-                    # Логика замены 0 на "Цена договорная" прямо в тексте раздела
-                    # Ищем " 0 " или ": 0" или " 0 руб"
-                    import re
-                    processed_text = re.sub(r'[:\s]0(\s|руб|$)', ' Цена договорная ', section)
-                    
-                    # Формируем структуру, которую ожидает ваш бот (id, title, content, price)
-                    results.append((999, "Информация", processed_text, "0"))
+            rows = cur.fetchall()
+            
+            # --- ОБРАБОТКА РЕЗУЛЬТАТОВ (ЗАМЕНА 0) ---
+            final_results = []
+            for row in rows:
+                row_list = list(row)
+                
+                # Проверяем каждое поле. Если находим 0 — меняем на текст
+                for i, value in enumerate(row_list):
+                    # Приводим к строке и убираем пробелы для точного сравнения
+                    val_str = str(value).strip()
+                    if val_str == "0" or val_str == "0.0":
+                        row_list[i] = "Цена договорная"
+                
+                final_results.append(tuple(row_list))
+                
+            return final_results
+
     except Exception as e:
-        print(f"Ошибка чтения файла: {e}")
+        print(f"Ошибка БД: {e}")
+        return []
+    finally:
+        if 'conn' in locals(): conn.close()
 
     # 2. ПОИСК В БАЗЕ ДАННЫХ (Если в файле мало результатов или нужно дополнить)
     try:
