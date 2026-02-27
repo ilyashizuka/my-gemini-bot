@@ -112,16 +112,28 @@ def search_in_db(query):
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
+            # Модифицируем выборку цены: если 0, то заменяем на текст
+            price_logic = """
+                CASE 
+                    WHEN price = '0' OR price = 0 THEN 'Цена договорная' 
+                    ELSE CONCAT(price, ' руб.') 
+                END as formatted_price
+            """
+            
             if not clean_query or len(clean_query) < 2:
-                sql = "SELECT * FROM parsed_content GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 15"
+                # Вставляем нашу логику в SELECT
+                sql = f"SELECT id, title, content, {price_logic} FROM parsed_content GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 15"
                 cur.execute(sql)
             else:
                 words = [w[:4] for w in clean_query.split() if len(w) >= 2]
                 conds = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
                 params = []
                 for w in words: params.extend([f'%{w}%', f'%{w}%'])
-                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 10"
+                
+                # Вставляем нашу логику в SELECT здесь тоже
+                sql = f"SELECT id, title, content, {price_logic} FROM parsed_content WHERE {conds} GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 10"
                 cur.execute(sql, params)
+            
             return cur.fetchall()
     except Exception as e:
         print(f"Ошибка БД: {e}")
