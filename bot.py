@@ -108,33 +108,43 @@ def search_in_knowledge_base(query):
 
 # --- 3. ПОИСК В БАЗЕ ДАННЫХ (ЦЕНЫ) ---
 def search_in_db(query):
+    # Очистка запроса и подготовка корня слова для лучшего поиска
     clean_query = query.lower().replace('цена', '').replace('стоимость', '').replace('сколько', '').strip()
+    
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
-            # Модифицируем выборку цены: если 0, то заменяем на текст
-            price_logic = """
-                CASE 
-                    WHEN price = '0' OR price = 0 THEN 'Цена договорная' 
-                    ELSE CONCAT(price, ' руб.') 
-                END as formatted_price
-            """
-            
             if not clean_query or len(clean_query) < 2:
-                # Вставляем нашу логику в SELECT
-                sql = f"SELECT id, title, content, {price_logic} FROM parsed_content GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 15"
+                sql = "SELECT * FROM parsed_content GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 15"
                 cur.execute(sql)
             else:
+                # Берем первые 4 буквы каждого слова для поиска (морфология)
                 words = [w[:4] for w in clean_query.split() if len(w) >= 2]
                 conds = " AND ".join(["(LOWER(title) LIKE %s OR LOWER(content) LIKE %s)" for _ in words])
                 params = []
                 for w in words: params.extend([f'%{w}%', f'%{w}%'])
                 
-                # Вставляем нашу логику в SELECT здесь тоже
-                sql = f"SELECT id, title, content, {price_logic} FROM parsed_content WHERE {conds} GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 10"
+                sql = f"SELECT * FROM parsed_content WHERE {conds} GROUP BY title ORDER BY CAST(price AS UNSIGNED) DESC LIMIT 10"
                 cur.execute(sql, params)
             
-            return cur.fetchall()
+            rows = cur.fetchall()
+            
+            # Логика замены 0 на "Цена договорная"
+            final_results = []
+            for row in rows:
+                # Превращаем кортеж в список для редактирования
+                row_list = list(row)
+                
+                # Проходим по всем элементам строки (обычно цена — это последний или предпоследний столбец)
+                for i, value in enumerate(row_list):
+                    # Если значение равно 0 (число или строка), меняем на текст
+                    if str(value).strip() == "0" or value == 0:
+                        row_list[i] = "Цена договорная"
+                
+                final_results.append(tuple(row_list))
+                
+            return final_results
+            
     except Exception as e:
         print(f"Ошибка БД: {e}")
         return []
