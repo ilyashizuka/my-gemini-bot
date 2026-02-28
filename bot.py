@@ -5,8 +5,11 @@ import pymysql
 import re
 import requests
 import google.generativeai as genai
+from google.api_core import exceptions
+from google.generativeai.types import HarmCategory, HarmBlockThreshold  # Вот это добавляем
 from telebot import types
 from google.api_core import exceptions
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # Настройка логов для Render
 sys.stdout.reconfigure(line_buffering=True)
@@ -32,14 +35,23 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 def get_gemini_response(prompt):
-    for key in GEMINI_KEYS:
-        try:
-            genai.configure(api_key=key, transport='rest')
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            response = model.generate_content(prompt)
-            if response and response.text: return response.text
-        except Exception: continue
-    return "Извините, сейчас я не могу ответить. Попробуйте позже."
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # Теперь эти настройки будут работать благодаря импорту выше
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+
+    try:
+        # Передаем настройки безопасности в запрос
+        response = model.generate_content(prompt, safety_settings=safety_settings)
+        return response.text if response.candidates else "Извините, я не могу ответить на этот вопрос."
+    except Exception as e:
+        print(f"Ошибка API: {e}")
+        return None
 
 def search_in_db(query):
     clean_query = query.lower().replace('цена', '').replace('стоимость', '').strip()
@@ -87,21 +99,28 @@ def handle_msg(m):
     
     # МАРШРУТ
     if any(kw in text for kw in ['маршрут', 'доехать', 'добраться']):
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="btn_auto"))
-        markup.add(types.InlineKeyboardButton("🚌 Автобус", callback_data="btn_bus"))
-        bot.send_message(m.chat.id, "Выберите способ передвижения:", reply_markup=markup)
-        return
+    markup = types.InlineKeyboardMarkup()
+    # Добавляем все три кнопки
+    markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="btn_auto"))
+    markup.add(types.InlineKeyboardButton("🚌 Автобус", callback_data="btn_bus"))
+    markup.add(types.InlineKeyboardButton("🚆 Электричка", callback_data="btn_train")) # Вот она
+    
+    bot.send_message(m.chat.id, "Выберите способ передвижения:", reply_markup=markup)
+    return
 
-    # ПОИСК (СКИДКИ, ЦЕНЫ, БРОНЬ)
-    if any(kw in text for kw in ['цена', 'стоимость', 'скидк', 'брони', 'слип', 'лодка']):
-        rows = search_in_db(text)
-        if rows:
-            for r in rows:
-                p = r['price']
-                price_line = f"💰 *{p}*" if "договорная" in str(p) else f"💰 Цена: {p}"
-                bot.send_message(m.chat.id, f"🏠 *{r['title']}*\n{price_line}\n\n{r['content']}", parse_mode="Markdown")
-            return
+# Чтобы кнопки «ожили», добавьте этот обработчик:
+@bot.callback_query_handler(func=lambda call: True)
+def callback_inline(call):
+    if call.data == "btn_auto":
+        bot.send_message(call.message.chat.id, "Маршрут на авто: ...")
+    elif call.data == "btn_bus":
+        bot.send_message(call.message.chat.id, "Расписание автобусов: ...")
+    elif call.data == "btn_train":
+        bot.send_message(call.message.chat.id, "Расписание электричек: ...")
+    
+    # Обязательно уведомляем телеграм, что запрос обработан (убирает «часики»)
+    bot.answer_callback_query(call.id)
+
 
         # 3. GEMINI (Если ничего не нашли в файле и БД)
     # Отправляем только голый запрос пользователя, чтобы сберечь лимиты ключей
