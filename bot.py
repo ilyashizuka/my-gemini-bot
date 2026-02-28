@@ -5,8 +5,6 @@ import pymysql
 import re
 import requests
 import google.generativeai as genai
-from google.api_core import exceptions
-from google.generativeai.types import HarmCategory, HarmBlockThreshold  # Вот это добавляем
 from telebot import types
 from google.api_core import exceptions
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -30,6 +28,9 @@ DB_CONFIG = {
 
 # КЛЮЧИ GEMINI
 GEMINI_KEYS = list(set(filter(None, [os.getenv(f'GEMINI_KEY_{i}') for i in range(1, 4)] + [os.getenv('GEMINI_API_KEY')])))
+if GEMINI_KEYS:
+    genai.configure(api_key=GEMINI_KEYS[0])
+
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -37,7 +38,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 def get_gemini_response(prompt):
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    # Теперь эти настройки будут работать благодаря импорту выше
+    # Отключаем фильтры, чтобы Gemini отвечала на всё
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -46,7 +47,6 @@ def get_gemini_response(prompt):
     }
 
     try:
-        # Передаем настройки безопасности в запрос
         response = model.generate_content(prompt, safety_settings=safety_settings)
         return response.text if response.candidates else "Извините, я не могу ответить на этот вопрос."
     except Exception as e:
@@ -57,19 +57,18 @@ def search_in_db(query):
     clean_query = query.lower().replace('цена', '').replace('стоимость', '').strip()
     if len(clean_query) < 2: return []
 
-    # 1. ПОИСК В ФАЙЛЕ (Приоритет: Скидки, Бронирование)
+    # 1. ПОИСК В ФАЙЛЕ
     try:
         if os.path.exists('knowledge.txt'):
             with open('knowledge.txt', 'r', encoding='utf-8') as f:
                 sections = f.read().split('===')
                 for section in sections:
                     if clean_query[:4] in section.lower():
-                        # УСЛОВИЕ: Цена 0 = Цена договорная
                         res_text = re.sub(r'[:\s]0(\s|руб|$)', ' Цена договорная ', section.strip())
                         return [{'title': 'Информация', 'content': res_text, 'price': 'Цена договорная'}]
     except Exception as e: print(f"Ошибка файла: {e}")
 
-    # 2. ПОИСК В БД (Если в файле нет)
+    # 2. ПОИСК В БД
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
@@ -83,7 +82,9 @@ def search_in_db(query):
                 else:
                     r['price'] = f"{r['price']} руб."
             return rows
-    except Exception as e: print(f"Ошибка БД: {e}"); return []
+    except Exception as e: 
+        print(f"Ошибка БД: {e}")
+        return []
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -96,54 +97,52 @@ def start(m):
 @bot.message_handler(func=lambda m: True)
 def handle_msg(m):
     text = m.text.lower()
-    
-    # МАРШРУТ
+
+    # 1. ПРОВЕРКА МАРШРУТА
     if any(kw in text for kw in ['маршрут', 'доехать', 'добраться']):
-    markup = types.InlineKeyboardMarkup()
-    # Добавлены кнопки
-    markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="btn_auto"))
-    markup.add(types.InlineKeyboardButton("🚌 Автобус", callback_data="btn_bus"))
-    markup.add(types.InlineKeyboardButton("🚆 Электричка", callback_data="btn_train"))
-    
-    # Эти две строки обязательны (с тем же отступом):
-    bot.send_message(m.chat.id, "Выберите способ передвижения:", reply_markup=markup)
-    return  # Прерываем функцию, чтобы бот не пошел искать ответ в Gemini
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="btn_auto"))
+        markup.add(types.InlineKeyboardButton("🚌 Автобус", callback_data="btn_bus"))
+        markup.add(types.InlineKeyboardButton("🚆 Электричка", callback_data="btn_train"))
+        bot.send_message(m.chat.id, "Выберите способ передвижения:", reply_markup=markup)
+        return
 
-# Чтобы кнопки «ожили», добавьте этот обработчик:
-@bot.callback_query_handler(func=lambda call: True)
-def callback_inline(call):
-    if call.data == "btn_auto":
-        bot.send_message(call.message.chat.id, "Маршрут на авто: ...")
-    elif call.data == "btn_bus":
-        bot.send_message(call.message.chat.id, "Расписание автобусов: ...")
-    elif call.data == "btn_train":
-        bot.send_message(call.message.chat.id, "Расписание электричек: ...")
-    
-    # Обязательно уведомляем телеграм, что запрос обработан (убирает «часики»)
-    bot.answer_callback_query(call.id)
+    # 2. ПОИСК В БД/ФАЙЛЕ
+    db_results = search_in_db(text)
+    if db_results:
+        res = db_results[0]
+        msg = f"*{res['title']}*\n\n{res['content']}\n\n💰 {res['price']}"
+        bot.send_message(m.chat.id, msg, parse_mode="Markdown")
+        return
 
-
-        # 3. GEMINI (Если ничего не нашли в файле и БД)
-    # Отправляем только голый запрос пользователя, чтобы сберечь лимиты ключей
+    # 3. GEMINI (Если ничего не нашли)
     if m.chat.type == 'private' or (bot.get_me().username and bot.get_me().username in text):
         bot.send_chat_action(m.chat.id, 'typing')
-        
-        # Формируем минимальный промпт БЕЗ подгрузки файла
         simple_prompt = f"Ты помощник базы отдыха 'Вуокса-Вирта'. Кратко ответь на вопрос: {m.text}"
-        
         ans = get_gemini_response(simple_prompt)
         if ans:
             bot.reply_to(m, ans)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('btn_'))
-def route_callback(call):
-    # Здесь используется поиск в файле для деталей маршрута
-    res = search_in_db(call.data.split('_')[1])
+def callback_inline(call):
+    # Логика: если нажата кнопка, ищем информацию по ключевому слову в БД/файле
+    query_map = {
+        "btn_auto": "машине",
+        "btn_bus": "автобус",
+        "btn_train": "электричка"
+    }
+    
+    search_keyword = query_map.get(call.data, "маршрут")
+    res = search_in_db(search_keyword)
+    
     if res:
-        bot.send_message(call.message.chat.id, res[0]['content'], parse_mode="Markdown")
+        bot.edit_message_text(res[0]['content'], call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    else:
+        bot.answer_callback_query(call.id, "Информация временно недоступна")
+    
     bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
-    print("✅ БОТ ГОТОВ")
+    print("✅ БОТ ЗАПУЩЕН")
     bot.remove_webhook()
     bot.infinity_polling()
