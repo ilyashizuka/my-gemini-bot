@@ -100,13 +100,14 @@ def handle_msg(m):
     # МАРШРУТ
     if any(kw in text for kw in ['маршрут', 'доехать', 'добраться']):
     markup = types.InlineKeyboardMarkup()
-    # Добавляем все три кнопки
+    # Добавлены кнопки
     markup.add(types.InlineKeyboardButton("🚗 На машине", callback_data="btn_auto"))
     markup.add(types.InlineKeyboardButton("🚌 Автобус", callback_data="btn_bus"))
-    markup.add(types.InlineKeyboardButton("🚆 Электричка", callback_data="btn_train")) # Вот она
+    markup.add(types.InlineKeyboardButton("🚆 Электричка", callback_data="btn_train"))
     
+    # Эти две строки обязательны (с тем же отступом):
     bot.send_message(m.chat.id, "Выберите способ передвижения:", reply_markup=markup)
-    return
+    return  # Прерываем функцию, чтобы бот не пошел искать ответ в Gemini
 
 # Чтобы кнопки «ожили», добавьте этот обработчик:
 @bot.callback_query_handler(func=lambda call: True)
