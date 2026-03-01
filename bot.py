@@ -1,7 +1,8 @@
 import os
 import telebot
 import time
-from gemini_handler import get_ai_answer 
+from gemini_handler import get_ai_answer
+from db_worker import save_to_db  # Импортируем нашу функцию из db_worker.py
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
@@ -10,6 +11,38 @@ if not BOT_TOKEN:
     exit(1)
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# --- НОВЫЙ БЛОК ДЛЯ КОМАНДЫ UPDATE ---
+@bot.message_handler(commands=['update'])
+def run_update(message):
+    print(f"Команда /update от {message.from_user.id}", flush=True)
+    try:
+        bot.reply_to(message, "⏳ Запускаю синхронизацию с БД Hostland...")
+        
+        # Вызываем функцию из db_worker.py с тестовыми данными
+        # Позже здесь можно вызвать основной парсер
+        success = save_to_db(
+            url="manual_tg_call", 
+            title=f"Запуск от {message.from_user.first_name}", 
+            price="0", 
+            phone="---", 
+            content="Ручное обновление базы через Telegram-бота"
+        )
+        
+        if success:
+            bot.send_message(message.chat.id, "✅ Данные успешно записаны в таблицу parsed_content!")
+        else:
+            bot.send_message(message.chat.id, "❌ Ошибка: База отклонила подключение. Проверь логи Render.")
+            
+    except Exception as e:
+        print(f"ОШИБКА В ХЕНДЛЕРЕ UPDATE: {e}", flush=True)
+        bot.send_message(message.chat.id, f"❌ Критический сбой: {e}")
+
+# --- ТВОЙ СТАРЫЙ ОБРАБОТЧИК (ОСТАЕТСЯ НИЖЕ) ---
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    # Тут твой код с get_ai_answer...
+
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
