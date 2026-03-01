@@ -30,9 +30,15 @@ def handle_all_messages(message):
         bot.send_message(message.chat.id, "Произошла ошибка при обращении к ИИ.")
 
 if __name__ == "__main__":
-    print("--- ЗАПУСК БОТА ---")
-    # Сбрасываем старые соединения (лечим ошибку 409 Conflict)
-    bot.remove_webhook()
-    print("Бот успешно запущен и готов принимать сообщения!")
-    # Запускаем бесконечный опрос серверов Telegram
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    print("--- ЖЕСТКИЙ ПЕРЕЗАПУСК ---")
+    try:
+        # 1. Сначала полностью удаляем вебхук (чистим хвосты)
+        bot.remove_webhook()
+        import time
+        time.sleep(2) # Даем Telegram 2 секунды, чтобы закрыть старое соединение
+        
+        print("Запускаю infinity_polling...")
+        # 2. Используем infinity_polling с коротким таймаутом
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    except Exception as e:
+        print(f"Ошибка при старте: {e}")
