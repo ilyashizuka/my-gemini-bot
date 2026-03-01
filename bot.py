@@ -35,4 +35,4 @@ if __name__ == "__main__":
     bot.remove_webhook()
     print("Бот успешно запущен и готов принимать сообщения!")
     # Запускаем бесконечный опрос серверов Telegram
-    bot.polling(none_stop=True)
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
