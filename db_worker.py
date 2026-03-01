@@ -16,22 +16,32 @@ DB_CONFIG = {
 
 
 def save_to_db(url, title, price, phone, content=""):
+    connection = None
     try:
+        print(f"--- БД: Очистка и сохранение {url} ---", flush=True)
         connection = pymysql.connect(**DB_CONFIG)
         with connection.cursor() as cursor:
+            # 1. УДАЛЯЕМ СТАРЫЕ ЗАПИСИ
+            # Если нужно удалить ВООБЩЕ ВСЁ:
+            cursor.execute("DELETE FROM `parsed_content`")
+            
+            # Если нужно удалять только записи с таким же URL (дубликаты):
+            # cursor.execute("DELETE FROM `parsed_content` WHERE `url` = %s", (url,))
+            
+            # 2. ВСТАВЛЯЕМ НОВУЮ ЗАПИСЬ
             sql = """
                 INSERT INTO `parsed_content` (`url`, `title`, `price`, `phone`, `content`) 
                 VALUES (%s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE 
-                    `title` = VALUES(`title`),
-                    `price` = VALUES(`price`),
-                    `phone` = VALUES(`phone`),
-                    `content` = VALUES(`content`)
             """
             cursor.execute(sql, (url, title, price, phone, content))
+            
             connection.commit()
+            print(f"✅ БД: Таблица очищена, данные записаны: {title}", flush=True)
+            return True
     except Exception as e:
-        print(f"Ошибка БД: {e}")
+        print(f"❌ ОШИБКА БД: {e}", flush=True)
+        return False
     finally:
-        if 'connection' in locals():
+        if connection:
             connection.close()
+
