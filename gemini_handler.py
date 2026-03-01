@@ -1,33 +1,28 @@
 import os
 import google.generativeai as genai
+import traceback # Добавили для вывода точной причины
 
 def get_ai_answer(prompt):
-    # Список твоих ключей из Render
-    KEY_NAMES = ['GEMINI_KEY_1', 'GEMINI_KEY_2', 'GEMINI_KEY_3']
-    errors = []
-
-    for name in KEY_NAMES:
+    keys = ['GEMINI_KEY_1', 'GEMINI_KEY_2', 'GEMINI_KEY_3']
+    
+    for name in keys:
         key = os.environ.get(name)
-        if not key:
-            errors.append(f"{name}: отсутствует в Render")
-            continue
-
+        if not key: continue
+        
         try:
-            # Чистим ключ от всякого мусора
+            # Очистка ключа
             clean_key = key.strip().replace('"', '').replace("'", "")
             genai.configure(api_key=clean_key)
             
-            # Пробуем именно Flash 2.0
+            # Пробуем модель
             model = genai.GenerativeModel('gemini-2.0-flash')
             response = model.generate_content(prompt)
+            return response.text
             
-            if response and response.text:
-                return response.text
-                
-        except Exception as e:
-            # Сохраняем текст ошибки, чтобы показать его тебе
-            errors.append(f"{name}: {str(e)}")
+        except Exception:
+            # Если ошибка внутри цикла - пишем её в консоль Render
+            print(f"Ошибка в ключе {name}: {traceback.format_exc()}")
             continue
 
-    # Если всё сдохло, бот пришлет тебе список всех ошибок
-    return "ОШИБКИ КЛЮЧЕЙ:\n" + "\n".join(errors)
+    # Если всё упало, возвращаем ПОЛНЫЙ ТЕКСТ ошибки из последнего сбоя
+    return f"КРИТИЧЕСКИЙ СБОЙ ФУНКЦИИ:\n{traceback.format_exc()}"
