@@ -1,28 +1,30 @@
 import os
 import google.generativeai as genai
-import traceback # Добавили для вывода точной причины
 
 def get_ai_answer(prompt):
-    keys = ['GEMINI_KEY_1', 'GEMINI_KEY_2', 'GEMINI_KEY_3']
+    key_names = ['GEMINI_KEY_1', 'GEMINI_KEY_2', 'GEMINI_KEY_3']
     
-    for name in keys:
-        key = os.environ.get(name)
-        if not key: continue
-        
+    for name in key_names:
+        raw_key = os.environ.get(name)
+        if not raw_key:
+            continue
+            
         try:
-            # Очистка ключа
-            clean_key = key.strip().replace('"', '').replace("'", "")
-            genai.configure(api_key=clean_key)
-            
-            # Пробуем модель
+            key = raw_key.strip().replace('"', '').replace("'", "")
+            genai.configure(api_key=key)
             model = genai.GenerativeModel('gemini-2.0-flash')
-            response = model.generate_content(prompt)
-            return response.text
             
+            # Генерация контента
+            response = model.generate_content(prompt)
+            
+            # ЖЕСТКАЯ ПРОВЕРКА: если Gemini вернул пустой объект или заблокировал ответ
+            if response and hasattr(response, 'text') and response.text:
+                return response.text
+            else:
+                continue # Пробуем следующий ключ, если этот выдал пустоту
+                
         except Exception:
-            # Если ошибка внутри цикла - пишем её в консоль Render
-            print(f"Ошибка в ключе {name}: {traceback.format_exc()}")
             continue
 
-    # Если всё упало, возвращаем ПОЛНЫЙ ТЕКСТ ошибки из последнего сбоя
-    return f"КРИТИЧЕСКИЙ СБОЙ ФУНКЦИИ:\n{traceback.format_exc()}"
+    # Если прошли все ключи и везде пустота/ошибки
+    return "Извини, ИИ не смог сформировать ответ. Проверь ключи в Render."
