@@ -27,10 +27,17 @@ def handle_all_messages(message):
         bot.send_message(message.chat.id, "The bot encountered an error. See logs.")
 
 if __name__ == "__main__":
-    print("--- BOT START (POLLING) ---", flush=True)
+    print("--- ЧИСТКА ХВОСТОВ (409) ---", flush=True)
     try:
+        # 1. Сносим вебхук на корню
         bot.remove_webhook()
-        time.sleep(1)
-        bot.infinity_polling(timeout=20, long_polling_timeout=10)
+        
+        # 2. Пауза 5 секунд, чтобы Telegram понял: мы свободны
+        import time
+        time.sleep(5) 
+        
+        print("Запускаю поллинг...", flush=True)
+        # 3. Игнорируем старые сообщения (чтобы бот не спамил при старте)
+        bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
     except Exception as e:
-        print(f"Start error: {e}", flush=True)
+        print(f"Ошибка при старте: {e}", flush=True)
