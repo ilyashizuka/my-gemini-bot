@@ -12,7 +12,7 @@ def get_ai_answer(prompt):
         try:
             key = raw_key.strip().replace('"', '').replace("'", "")
             genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
             # Генерация контента
             response = model.generate_content(prompt)
