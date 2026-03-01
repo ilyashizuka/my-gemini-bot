@@ -1,8 +1,13 @@
 import os
 import telebot
 import time
+import sys
+import codecs
 from gemini_handler import get_ai_answer
-from db_worker import save_to_db  # Импортируем нашу функцию из db_worker.py
+from db_worker import save_to_db
+
+# Принудительно ставим UTF-8 для логов Render, чтобы не было кракозябр
+sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
@@ -12,15 +17,14 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- НОВЫЙ БЛОК ДЛЯ КОМАНДЫ UPDATE ---
+# --- 1. КОМАНДА UPDATE (БЕЗ ИИ) ---
 @bot.message_handler(commands=['update'])
 def run_update(message):
-    print(f"Команда /update от {message.from_user.id}", flush=True)
+    print(f"--- ЗАПУСК ПАРСЕРА (БЕЗ ИИ) от {message.from_user.id} ---", flush=True)
     try:
-        bot.reply_to(message, "⏳ Запускаю синхронизацию с БД Hostland...")
+        bot.reply_to(message, "⏳ Синхронизация с БД Hostland: очистка и запись...")
         
-        # Вызываем функцию из db_worker.py с тестовыми данными
-        # Позже здесь можно вызвать основной парсер
+        # Вызываем функцию из db_worker.py
         success = save_to_db(
             url="manual_tg_call", 
             title=f"Запуск от {message.from_user.first_name}", 
@@ -30,47 +34,37 @@ def run_update(message):
         )
         
         if success:
-            bot.send_message(message.chat.id, "✅ Данные успешно записаны в таблицу parsed_content!")
+            bot.send_message(message.chat.id, "✅ Старые данные удалены. Новая запись в parsed_content добавлена!")
         else:
-            bot.send_message(message.chat.id, "❌ Ошибка: База отклонила подключение. Проверь логи Render.")
+            bot.send_message(message.chat.id, "❌ Ошибка БД. Проверь логи Render или белый список IP в Hostland.")
             
     except Exception as e:
         print(f"ОШИБКА В ХЕНДЛЕРЕ UPDATE: {e}", flush=True)
         bot.send_message(message.chat.id, f"❌ Критический сбой: {e}")
 
-# --- ТВОЙ СТАРЫЙ ОБРАБОТЧИК (ОСТАЕТСЯ НИЖЕ) ---
+# --- 2. ОБЫЧНЫЕ СООБЩЕНИЯ (С ИИ) ---
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    # Тут твой код с get_ai_answer...
-
-
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    print(f"User wrote: {message.text}", flush=True) # Check incoming
+    print(f"Запрос к ИИ: {message.text}", flush=True)
     try:
-        # Send "typing" status so the user sees activity
+        # Статус "печатает"
         bot.send_chat_action(message.chat.id, 'typing')
         
+        # Запрос к Джемени
         ai_response = get_ai_answer(message.text)
         
-        print(f"AI response received (first 20 chars): {ai_response[:20]}", flush=True)
+        print(f"Ответ ИИ получен (первые 20 симв): {ai_response[:20]}", flush=True)
         bot.send_message(message.chat.id, ai_response)
     except Exception as e:
-        print(f"ERROR IN BOT.PY: {e}", flush=True)
-        bot.send_message(message.chat.id, "The bot encountered an error. See logs.")
+        print(f"ОШИБКА ИИ: {e}", flush=True)
+        bot.send_message(message.chat.id, "Бот столкнулся с ошибкой при обращении к ИИ.")
 
 if __name__ == "__main__":
-    print("--- ЧИСТКА ХВОСТОВ (409) ---", flush=True)
+    print("--- СТАРТ БОТА (ЧИСТКА 409) ---", flush=True)
     try:
-        # 1. Сносим вебхук на корню
         bot.remove_webhook()
-        
-        # 2. Пауза 5 секунд, чтобы Telegram понял: мы свободны
-        import time
         time.sleep(5) 
-        
         print("Запускаю поллинг...", flush=True)
-        # 3. Игнорируем старые сообщения (чтобы бот не спамил при старте)
         bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
     except Exception as e:
-        print(f"Ошибка при старте: {e}", flush=True)
+        print(f"Ошибка старта: {e}", flush=True)
