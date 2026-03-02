@@ -24,16 +24,35 @@ def handle_messages(message):
     if not message.text:
         return
 
-    # Команда обновления базы (только для админа)
+        # Команда обновления базы (только для админа)
     if message.text == '/update':
         if message.from_user.id == ADMIN_ID:
             bot.reply_to(message, "⏳ Начинаю парсинг сайта...")
-            # Вызов функции из db_worker.py
+            
+            # Получаем результат (теперь это список)
             result = run_parser()
-            bot.send_message(message.chat.id, result)
+            
+            if isinstance(result, list):
+                # Формируем отчет из 15 строк
+                report = f"<b>✅ База успешно обновлена!</b>\n"
+                report += f"Найдено позиций: <b>{len(result)}</b>\n\n"
+                
+                for item in result:
+                    url, title, price, content = item
+                    # Если есть описание (для лодок/бани), добавляем его в скобках
+                    line = f"• {title}: <b>{price} руб.</b>"
+                    if content:
+                        line += f" — <i>{content}</i>"
+                    report += line + "\n"
+                
+                bot.send_message(message.chat.id, report, parse_mode='HTML', disable_web_page_preview=True)
+            else:
+                # Если вернулась строка с ошибкой
+                bot.send_message(message.chat.id, result)
         else:
             bot.reply_to(message, "🔐 Доступ к обновлению только для администратора.")
         return
+
 
     # Вызов Gemini через префикс /**
     if message.text.startswith('/**'):
