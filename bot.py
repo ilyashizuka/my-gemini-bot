@@ -49,8 +49,13 @@ def handle_messages(message):
 
 # 5. Точка входа
 if __name__ == "__main__":
-    print("🚀 Бот успешно запущен и слушает команды...")
     try:
-        bot.infinity_polling(timeout=20, long_polling_timeout=10)
+        print("🚀 Очистка старых соединений (Fix Error 409)...")
+        # Принудительно сбрасываем старое подключение перед запуском
+        bot.remove_webhook() 
+        print("✅ Бот успешно запущен и слушает команды!")
+        # Запускаем с чуть большими таймаутами для стабильности на Render
+        bot.infinity_polling(timeout=30, long_polling_timeout=15)
     except Exception as e:
         print(f"🔥 Критическая ошибка при работе: {e}")
+
