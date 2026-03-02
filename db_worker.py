@@ -14,87 +14,91 @@ DB_CONFIG = {
     'cursorclass': pymysql.cursors.DictCursor
 }
 
-def get_house_data(h3_element):
-    """Ищет цену домика (для Пятерки и Студии)"""
+def get_house_price(h3_element):
+    """Ищет цену домика (7000 для Пятерки и т.д.)"""
     current = h3_element.find_next_sibling()
     while current and current.name != 'h3':
         if current.name == 'p':
             text = current.get_text().replace('\xa0', ' ').strip()
-            # Регулярка ищет любое число перед словом 'рублей' в предложениях со словом 'Стоимость'
             if "Стоимость" in text:
                 match = re.search(r'Стоимость.*?\s*(\d[\d\s]*)\s*рублей', text)
-                if match:
-                    price = re.sub(r'\D', '', match.group(1))
-                    return price, text
+                if match: return re.sub(r'\D', '', match.group(1))
         current = current.find_next_sibling()
-    return "0", h3_element.get_text(strip=True)
+    return "0"
 
 def run_parser():
     base_url = "https://vuoksa-virta.ru"
-    all_data = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0'}
+    all_data = [] # Список кортежей (url, title, price, content)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140.0.0.0'}
 
     try:
         resp = requests.get(base_url, headers=headers, timeout=20)
         resp.encoding = 'utf-8'
         soup = BeautifulSoup(resp.content, 'html.parser')
-        menu = soup.find(id='menu') or soup.find('nav')
-        
-        links = set()
-        for a in menu.find_all('a', href=True):
-            href = a['href'].split('#')[0]
-            if not href or href in ['/', 'index.html']: continue
-            links.add(href if href.startswith('http') else f"{base_url}/{href.lstrip('/')}")
-        links.add(base_url)
 
-        for url in links:
-            p_soup = BeautifulSoup(requests.get(url, headers=headers).content, 'html.parser')
+        # --- 1. ДОМИКИ (5 штук) ---
+        house_anchors = ['5-ka', 'homewithsauna', 'figwam', 'nomernadellingom', 'studia']
+        for anchor in house_anchors:
+            h3 = soup.find('h3', id=anchor)
+            if h3:
+                price = get_house_price(h3)
+                all_data.append((f"{base_url}#{anchor}", h3.get_text(strip=True), price, ""))
 
-            # --- 1. ДОМИКИ ---
-            for h3 in p_soup.find_all('h3', id=True):
-                if h3['id'] in ['sauna', 'boat_rental']: continue
-                price, content = get_house_data(h3)
-                all_data.append((f"{url}?#{h3['id']}", h3.get_text(strip=True), price, content))
+        # --- 2. ЛОДКИ (8 записей: Мираж и Пелла по 4 записи каждая) ---
+        # Ищем все таблицы (figure), у которых id начинается на priceShip
+        for fig in soup.find_all('figure', id=re.compile(r'^priceShip')):
+            caption = fig.find('caption')
+            # Определяем имя лодки из заголовка таблицы
+            ship_name = "Мираж" if caption and "Мираж" in caption.get_text() else "Пелла"
+            
+            # Берем первые две строки с данными (День и Сутки)
+            rows = fig.find_all('tr')[1:3] 
+            for row in rows:
+                tds = row.find_all('td')
+                if len(tds) >= 3:
+                    tariff = tds[0].get_text(strip=True).replace('тариф', '').strip()
+                    price_in = re.sub(r'\D', '', tds[1].get_text())
+                    price_out = re.sub(r'\D', '', tds[2].get_text())
+                    
+                    # Запись для Своих
+                    all_data.append((
+                        f"{base_url}#{ship_name}_{tariff}_svoi", 
+                        "Прокат лодки", 
+                        price_in, 
+                        f"{ship_name} {tariff} свои"
+                    ))
+                    # Запись для Пришлых
+                    all_data.append((
+                        f"{base_url}#{ship_name}_{tariff}_prishlie", 
+                        "Прокат лодки", 
+                        price_out, 
+                        f"{ship_name} {tariff} пришлые"
+                    ))
 
-            # --- 2. ЛОДКИ (id=priceShip) ---
-            ship_fig = p_soup.find('figure', id='priceShip')
-            if ship_fig:
-                # Извлекаем название лодки (Мираж или Пелла)
-                caption = ship_fig.find('caption')
-                ship_name = "Мираж" if caption and "Мираж" in caption.get_text() else "Пелла"
-                
-                rows = ship_fig.find_all('tr')[1:5] # Строки с тарифами
-                for i, row in enumerate(rows):
-                    tds = row.find_all('td')
-                    if len(tds) >= 3:
-                        # Очищаем тариф от мусора
-                        tariff = tds[0].get_text(strip=True).replace('тариф', '').replace('Тариф', '').strip()
-                        p_in = re.sub(r'\D', '', tds[1].get_text())
-                        p_out = re.sub(r'\D', '', tds[2].get_text())
-                        
-                        # Формат: Прокат лодки | [Название] [Тариф] для проживающих
-                        all_data.append((f"{url}#ship_in_{i}", "Прокат лодки", p_in, f"{ship_name} {tariff} для проживающих"))
-                        all_data.append((f"{url}#ship_out_{i}", "Прокат лодки", p_out, f"{ship_name} {tariff} для непроживающих"))
+        # --- 3. БАНЯ (2 записи) ---
+        sauna_fig = soup.find('figure', id='priceSauna')
+        if sauna_fig:
+            row = sauna_fig.find_all('tr')[1] # Первая строка цен
+            tds = row.find_all('td')
+            if len(tds) >= 2:
+                p_in = re.sub(r'\D', '', tds[0].get_text())
+                p_out = re.sub(r'\D', '', tds[1].get_text())
+                all_data.append((f"{base_url}#sauna_svoi", "Баня на дровах", p_in, "свои"))
+                all_data.append((f"{base_url}#sauna_prishlie", "Баня на дровах", p_out, "пришлые"))
 
-            # --- 3. БАНЯ ---
-            sauna_fig = p_soup.find('figure', id='priceSauna')
-            if sauna_fig:
-                rows = sauna_fig.find_all('tr')[1:]
-                for i, row in enumerate(rows):
-                    tds = row.find_all('td')
-                    if len(tds) >= 2:
-                        p_in = re.sub(r'\D', '', tds[0].get_text())
-                        p_out = re.sub(r'\D', '', tds[1].get_text())
-                        all_data.append((f"{url}#sauna_in_{i}", "Баня на дровах", p_in, "Баня на дровах для проживающих"))
-                        all_data.append((f"{url}#sauna_out_{i}", "Баня на дровах", p_out, "Баня на дровах для непроживающих"))
-
+        # --- ЗАПИСЬ В БД ---
         if all_data:
             conn = pymysql.connect(**DB_CONFIG)
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM `parsed_content`")
-                cur.executemany("INSERT INTO `parsed_content` (url, title, price, content) VALUES (%s,%s,%s,%s)", all_data)
-                conn.commit()
-            return f"✅ Успех! Обновлено {len(all_data)} строк."
-        return "⚠️ Данных нет."
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM `parsed_content`")
+                    sql = "INSERT INTO `parsed_content` (url, title, price, content) VALUES (%s, %s, %s, %s)"
+                    cur.executemany(sql, all_data)
+                    conn.commit()
+                return f"✅ Успешно! В базе ровно {len(all_data)} строк."
+            finally:
+                conn.close()
+        return "⚠️ Данные не найдены."
+
     except Exception as e:
-        return f"❌ Ошибка: {e}"
+        return f"❌ Ошибка парсера 2026: {e}"
