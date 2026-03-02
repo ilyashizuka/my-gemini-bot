@@ -44,51 +44,52 @@ def run_parser():
                 price = get_house_price(h3)
                 all_data.append((f"{base_url}#{hid}", h3.get_text(strip=True), price, ""))
 
-        # --- 2. ЛОДКИ (8 записей) ---
-        # Итерируем по всем таблицам лодок (Мираж и Пелла имеют id начинающиеся на priceShip)
+        # --- 2. ПРОКАТ ЛОДОК (8 записей) ---
         for fig in soup.find_all('figure', id=re.compile(r'^priceShip')):
+            # Определяем марку лодки (Мираж или Пелла)
             caption = fig.find('caption')
-            # Определяем марку лодки
             ship_brand = "Мираж" if caption and "Мираж" in caption.get_text() else "Пелла"
             
-            # Строки: Пропускаем заголовок (tr[0]), берем tr[1] (День) и tr[2] (Сутки)
-            rows = fig.find_all('tr')[1:3]
-            for row in rows:
+            # Находим заголовки колонок (второй и третий td первой строки tr)
+            rows = fig.find_all('tr')
+            header_cells = rows[0].find_all('td')
+            # Заголовки: "Для проживающих", "Без проживания"
+            col_name_2 = header_cells[1].get_text(strip=True) if len(header_cells) > 1 else "Для проживающих"
+            col_name_3 = header_cells[2].get_text(strip=True) if len(header_cells) > 2 else "Без проживания"
+
+            # Тарифы (обычно строки 1 и 2 после заголовка)
+            data_rows = rows[1:3] 
+            for row in data_rows:
                 tds = row.find_all('td')
                 if len(tds) >= 3:
-                    # tds[0] - Тариф (День/Сутки), tds[1] - Для проживающих, tds[2] - Без проживания
-                    tariff = tds[0].get_text(strip=True).replace('тариф', '').replace('Тариф', '').strip()
-                    price_in = re.sub(r'\D', '', tds[1].get_text())
-                    price_out = re.sub(r'\D', '', tds[2].get_text())
+                    # Из первой колонки берем тариф (например, "тариф День")
+                    raw_tariff = tds[0].get_text(strip=True)
+                    # Склеиваем по твоей матрице: [Марка] [Тариф] [Заголовок столбца]
+                    full_name_base = f"{ship_brand} {raw_tariff}"
                     
-                    # Для проживающих
-                    all_data.append((
-                        f"{base_url}#{ship_brand}_{tariff}_in", 
-                        "Прокат лодки", 
-                        price_in, 
-                        f"{ship_brand} тариф {tariff}: Для проживающих"
-                    ))
-                    # Без проживания
-                    all_data.append((
-                        f"{base_url}#{ship_brand}_{tariff}_out", 
-                        "Прокат лодки", 
-                        price_out, 
-                        f"{ship_brand} тариф {tariff}: Без проживания"
-                    ))
+                    price_2 = re.sub(r'\D', '', tds[1].get_text()) # Цена во 2-м столбце
+                    price_3 = re.sub(r'\D', '', tds[2].get_text()) # Цена в 3-м столбце
+                    
+                    # Запись 1: Для проживающих
+                    all_data.append((f"{base_url}#{ship_brand}_{raw_tariff}_in", "Прокат лодки", price_2, f"{full_name_base} {col_name_2}"))
+                    # Запись 2: Без проживания
+                    all_data.append((f"{base_url}#{ship_brand}_{raw_tariff}_out", "Прокат лодки", price_3, f"{full_name_base} {col_name_3}"))
 
-        # --- 3. БАНЯ (2 записи) ---
+        # --- 3. БАНЯ НА ДРОВАХ (2 записи) ---
         sauna_fig = soup.find('figure', id='priceSauna')
         if sauna_fig:
-            # Берем первую строку с ценами (tr[1])
-            row = sauna_fig.find_all('tr')[1]
-            tds = row.find_all('td')
-            if len(tds) >= 2:
-                # tds[0] - Для проживающих, tds[1] - Без проживания
-                p_in = re.sub(r'\D', '', tds[0].get_text())
-                p_out = re.sub(r'\D', '', tds[1].get_text())
+            rows = sauna_fig.find_all('tr')
+            header_cells = rows[0].find_all('td')
+            col_name_1 = header_cells[0].get_text(strip=True) # Для проживающих
+            col_name_2 = header_cells[1].get_text(strip=True) # Без проживания
+            
+            data_cells = rows[1].find_all('td')
+            if len(data_cells) >= 2:
+                p_in = re.sub(r'\D', '', data_cells[0].get_text())
+                p_out = re.sub(r'\D', '', data_cells[1].get_text())
                 
-                all_data.append((f"{base_url}#sauna_in", "Баня на дровах", p_in, "Для проживающих"))
-                all_data.append((f"{base_url}#sauna_out", "Баня на дровах", p_out, "Без проживания"))
+                all_data.append((f"{base_url}#sauna_in", "Баня на дровах", p_in, col_name_1))
+                all_data.append((f"{base_url}#sauna_out", "Баня на дровах", p_out, col_name_2))
 
         # --- ЗАПИСЬ В БД ---
         if all_data:
@@ -105,4 +106,4 @@ def run_parser():
         return "⚠️ Данные не найдены."
 
     except Exception as e:
-        return f"❌ Критическая ошибка: {e}"
+        return f"❌ Ошибка: {e}"
