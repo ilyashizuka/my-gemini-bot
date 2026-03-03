@@ -2,7 +2,7 @@ import os
 import re
 import aiomysql
 
-# Конфигурация БД (Hostland) — из твоего рабочего конфига
+# Конфигурация БД (Hostland)
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
     'port': 3306,
@@ -14,17 +14,16 @@ DB_CONFIG = {
 }
 
 def load_knowledge():
-    """Чтение файла и разбивка на блоки по === заголовок ==="""
+    """Читает knowledge.txt и разбивает на блоки по === заголовок ==="""
     file_path = "knowledge.txt"
-    if not os.path.exists(file_path): return {}
+    if not os.path.exists(file_path):
+        return {}
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
     
-    # Режем файл по разделителю ===
     blocks = re.split(r'===', content)
     kb = {}
     for i in range(1, len(blocks), 2):
-        # Сохраняем ключи (заголовки) в верхнем регистре для поиска
         keys = [k.strip().upper() for k in blocks[i].split(',')]
         body = blocks[i+1].strip()
         for key in keys:
@@ -32,11 +31,23 @@ def load_knowledge():
     return kb
 
 async def get_formatted_text(topic_key):
-    """Сборка текста: Шаблон из файла + Цены из таблицы parsed_content"""
+    """Сборка текста: Шаблон + Цены из ТВОЕЙ таблицы parsed_content"""
     kb = load_knowledge()
-    template = kb.get(topic_key.upper(), f"Информация по запросу '{topic_key}' не найдена.")
     
-    # КАРТА СООТВЕТСТВИЯ (URL из парсера -> Теги в твоем файле knowledge.txt)
+    # Умный поиск шаблона по ключу или вхождению слова
+    target_key = topic_key.upper()
+    template = kb.get(target_key)
+    
+    if not template:
+        for k, v in kb.items():
+            if target_key in k:
+                template = v
+                break
+    
+    if not template:
+        return f"Информация по запросу {topic_key} не найдена."
+
+    # КАРТА СООТВЕТСТВИЯ (URL из твоего парсера -> Теги в твоем файле)
     mapping = {
         # Домики
         "https://vuoksa-virta.ru#5-ka": "price_house_5",
@@ -45,17 +56,17 @@ async def get_formatted_text(topic_key):
         "https://vuoksa-virta.ru#nomernadellingom": "price_komunalka",
         "https://vuoksa-virta.ru#studia": "price_studio",
         
-        # Баня на дровах
+        # Баня на дровах (твои 1500 и 2000)
         "https://vuoksa-virta.ru#sauna_in": "price_sauna_in",
         "https://vuoksa-virta.ru#sauna_out": "price_sauna_out",
         
-        # Прокат Лодок (Мираж)
+        # Лодки Мираж (0 - День, 1 - Сутки)
         "https://vuoksa-virta.ru#boat_in_0": "price_mirage_day_in",
         "https://vuoksa-virta.ru#boat_out_0": "price_mirage_day_out",
         "https://vuoksa-virta.ru#boat_in_1": "price_mirage_sutki_in",
         "https://vuoksa-virta.ru#boat_out_1": "price_mirage_sutki_out",
         
-        # Прокат Лодок (Пелла)
+        # Лодки Пелла (2 - День, 3 - Сутки)
         "https://vuoksa-virta.ru#boat_in_2": "price_pella_day_in",
         "https://vuoksa-virta.ru#boat_out_2": "price_pella_day_out",
         "https://vuoksa-virta.ru#boat_in_3": "price_pella_sutki_in",
@@ -64,33 +75,31 @@ async def get_formatted_text(topic_key):
 
     conn = None
     try:
-        # Асинхронное подключение к MySQL
         conn = await aiomysql.connect(**DB_CONFIG)
         async with conn.cursor() as cur:
-            # Читаем данные, которые вчера/сегодня записал парсер
+            # Берем актуальные данные из parsed_content
             await cur.execute("SELECT url, price FROM parsed_content")
             rows = await cur.fetchall()
             
-            # Собираем словарь цен для метода .format()
+            # Собираем словарь цен, очищая их от текста (оставляем цифры)
             prices = {}
             for row in rows:
                 url = row['url']
                 if url in mapping:
-                    # Чистим цену (оставляем только цифры)
-                    val = str(row['price'])
-                    clean_price = re.sub(r'\D', '', val)
+                    clean_price = re.sub(r'\D', '', str(row['price']))
                     prices[mapping[url]] = clean_price
             
-            # Постоянные величины (константы)
-            prices['price_linen'] = "300"
-            prices['price_extra_bed'] = "1000"
+            # Добавляем константы (белье и доп.место)
+            prices.update({
+                "price_linen": "300",
+                "price_extra_bed": "1000"
+            })
 
-            # Вставляем значения из БД в шаблон {price_...}
+            # Подставляем всё в шаблон .format()
             return template.format(**prices)
             
     except Exception as e:
-        print(f"⚠️ Ошибка сборки текста в ботаничке: {e}")
-        # Если база не ответила, отдаем сырой текст из файла
+        print(f"❌ Ошибка в ботаничке: {e}")
         return template
     finally:
         if conn:
