@@ -2,7 +2,6 @@ import os
 import re
 import aiomysql
 
-# Настройки те же, что в парсере
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
     'port': 3306,
@@ -27,37 +26,16 @@ def load_knowledge():
 
 async def get_formatted_text(topic_key):
     kb = load_knowledge()
-    template = kb.get(topic_key.upper(), f"Информация {topic_key} не найдена.")
-    
-    # Карта соответствия: URL из парсера -> Ключ в knowledge.txt
-    mapping = {
-        "https://vuoksa-virta.ru#5-ka": "price_house_5",
-        "https://vuoksa-virta.ru#homewithsauna": "price_srub",
-        "https://vuoksa-virta.ru#figwam": "price_bungalo",
-        "https://vuoksa-virta.ru#nomernadellingom": "price_komunalka",
-        "https://vuoksa-virta.ru#studia": "price_studio"
-    }
-
+    template = kb.get(topic_key.upper(), "Инфо не найдено.")
+    conn = None
     try:
         conn = await aiomysql.connect(**DB_CONFIG)
         async with conn.cursor() as cur:
-            # Читаем из таблицы, которую заполнил парсер
-            await cur.execute("SELECT url, price FROM parsed_content")
+            await cur.execute("SELECT name, value FROM prices")
             rows = await cur.fetchall()
-            
-            # Собираем словарь цен, переводя URL в понятные боту ключи
-            prices = {}
-            for row in rows:
-                if row['url'] in mapping:
-                    prices[mapping[row['url']]] = str(row['price'])
-            
-            # Добавляем константы
+            prices = {row['name']: str(row['value']) for row in rows}
             prices['price_linen'] = "300"
-            prices['price_extra_bed'] = "1000"
-
             return template.format(**prices)
-    except Exception as e:
-        print(f"❌ Ошибка стыковки с БД: {e}")
-        return template
+    except Exception: return template
     finally:
-        if 'conn' in locals(): conn.close()
+        if conn: conn.close()
