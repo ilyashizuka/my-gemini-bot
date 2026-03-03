@@ -1,61 +1,44 @@
 import os
-import re
-import aiomysql
+import telebot
+import asyncio
+from gemini_handler import get_ai_answer
+from db_worker import run_parser
+from botani4ka import get_formatted_text, load_knowledge
 
-# Данные для подключения (из твоего конфига)
-DB_CONFIG = {
-    'host': 'mysql9.hostland.ru',
-    'port': 3306,
-    'user': 'host1324224',
-    'password': os.environ.get('DB_PASSWORD'),
-    'db': 'host1324224_botanik',
-    'charset': 'utf8mb4',
-    'cursorclass': aiomysql.DictCursor,
-}
+# Загрузка настроек
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip().replace('"', '')
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 
-def load_knowledge():
-    """Читает knowledge.txt и режет его на блоки по === заголовок ==="""
-    if not os.path.exists("knowledge.txt"):
-        print("❌ Файл knowledge.txt не найден!")
-        return {}
-    with open("knowledge.txt", "r", encoding="utf-8") as f:
-        content = f.read()
-    
-    blocks = re.split(r'===', content)
-    kb = {}
-    for i in range(1, len(blocks), 2):
-        # Очищаем заголовки (ключи) и переводим в верхний регистр
-        keys = [k.strip().upper() for k in blocks[i].split(',')]
-        body = blocks[i+1].strip()
-        for key in keys:
-            kb[key] = body
-    return kb
+bot = telebot.TeleBot(BOT_TOKEN)
+KNOWLEDGE = load_knowledge()
 
-async def get_formatted_text(topic_key):
-    """Берет текст из файла и вставляет цены из MySQL"""
-    # Подгружаем базу (в bot.py она уже загружена, но тут для страховки)
-    kb = load_knowledge()
-    template = kb.get(topic_key.upper(), f"Информация по запросу '{topic_key}' не найдена.")
-    
-    conn = None
+def sync_get_text(topic):
     try:
-        conn = await aiomysql.connect(**DB_CONFIG)
-        async with conn.cursor() as cur:
-            # name — ключ (price_house_5), value — цена
-            await cur.execute("SELECT name, value FROM prices")
-            rows = await cur.fetchall()
-            
-            # Собираем словарь цен
-            prices = {row['name']: str(row['value']) for row in rows}
-            # Константы, которых нет в БД
-            prices['price_linen'] = "300"
-            
-            # Форматируем шаблон данными из БД
-            return template.format(**prices)
+        return asyncio.run(get_formatted_text(topic))
     except Exception as e:
-        print(f"⚠️ Ошибка MySQL: {e}")
-        # Если база упала, возвращаем текст как есть (с тегами {price})
-        return template
-    finally:
-        if conn:
-            conn.close()
+        return f"⚠️ Ошибка: {e}"
+
+@bot.message_handler(func=lambda m: True)
+def handle_messages(message):
+    if not message.text: return
+    msg_text = message.text.strip()
+    msg_lower = msg_text.lower()
+
+    if msg_lower == '/start':
+        bot.reply_to(message, sync_get_text("ВАРИАНТЫ_ПРОЖИВАНИЯ"), parse_mode='Markdown')
+        return
+
+    if msg_lower == '/update' and message.from_user.id == ADMIN_ID:
+        bot.reply_to(message, "⏳ Обновляю базу...")
+        result = run_parser()
+        bot.send_message(message.chat.id, "✅ Готово!")
+        return
+
+    for key in KNOWLEDGE.keys():
+        if key.lower() in msg_lower:
+            bot.send_message(message.chat.id, sync_get_text(key), parse_mode='Markdown')
+            return
+
+if __name__ == "__main__":
+    bot.remove_webhook()
+    bot.infinity_polling()
