@@ -25,7 +25,9 @@ def sync_get_text(topic):
         print(f"❌ Ошибка сборки текста для {topic}: {e}")
         return "⚠️ Ошибка загрузки данных. Пожалуйста, попробуйте позже."
 
-# Функция создания кнопок для раздела Маршрут
+# --- БЛОК КНОПОК ---
+
+# Кнопки для раздела Маршрут
 def get_route_keyboard():
     markup = types.InlineKeyboardMarkup()
     btn_car = types.InlineKeyboardButton("🚗 На машине", callback_data="ROUTE_AUTO")
@@ -33,7 +35,23 @@ def get_route_keyboard():
     markup.add(btn_car, btn_public)
     return markup
 
-# 2. Обработчик всех входящих сообщений
+# Кнопки для выбора конкретного дома (из блока Варианты проживания)
+def get_houses_keyboard():
+    markup = types.InlineKeyboardMarkup()
+    # callback_data должна соответствовать ключам в knowledge.txt после префикса HOUSE_
+    btn_5 = types.InlineKeyboardButton("🏠 Пятёрочка", callback_data="HOUSE_ПЯТЕРОЧКА")
+    btn_srub = types.InlineKeyboardButton("🌲 Сруб с баней", callback_data="HOUSE_СРУБ")
+    btn_kom = types.InlineKeyboardButton("🏢 Коммуналка", callback_data="HOUSE_КОММУНАЛКА")
+    btn_std = types.InlineKeyboardButton("🎱 Студия", callback_data="HOUSE_СТУДИЯ")
+    btn_bg = types.InlineKeyboardButton("⛺️ Бунгало", callback_data="HOUSE_БУНГАЛО")
+    
+    markup.add(btn_5, btn_srub)
+    markup.add(btn_kom, btn_std)
+    markup.add(btn_bg)
+    return markup
+
+# --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
+
 @bot.message_handler(func=lambda m: True)
 def handle_messages(message):
     if not message.text:
@@ -42,12 +60,11 @@ def handle_messages(message):
     msg_text = message.text.strip()
     msg_lower = msg_text.lower()
 
-    # --- КОМАНДА /START ---
-    if msg_lower == '/start':
+    # --- КОМАНДА /START или запрос цен (Главное меню с кнопками домов) ---
+    if msg_lower == '/start' or any(word in msg_lower for word in ["цены", "стоимость", "варианты", "проживания"]):
         bot.send_chat_action(message.chat.id, 'typing')
-        # Выводим главный блок вариантов проживания
         answer = sync_get_text("ВАРИАНТЫ_ПРОЖИВАНИЯ")
-        bot.reply_to(message, answer, parse_mode='Markdown')
+        bot.send_message(message.chat.id, answer, reply_markup=get_houses_keyboard(), parse_mode='Markdown')
         return
 
     # --- КОМАНДА /UPDATE (АДМИН) ---
@@ -71,40 +88,47 @@ def handle_messages(message):
         return
 
     # --- УМНЫЙ ПОИСК ПО KNOWLEDGE.TXT ---
-    # Перебираем все блоки из файла
     for full_key in KNOWLEDGE.keys():
-        # Разбиваем заголовок (например "ДОМА, ЦЕНЫ") на отдельные слова
+        # Разбиваем заголовок из файла на отдельные слова-ключи
         keywords = [k.strip().lower() for k in full_key.split(',')]
         
-        # Если хоть одно слово-ключ есть в сообщении пользователя
         if any(word in msg_lower for word in keywords if len(word) > 2):
             bot.send_chat_action(message.chat.id, 'typing')
             
-            # Если это Маршрут — выдаем текст с кнопками
+            # Если это Маршрут — выдаем текст с кнопками проезда
             if any(r in keywords for r in ["маршрут", "доехать", "добраться"]):
                 answer = sync_get_text(full_key)
                 bot.send_message(message.chat.id, answer, reply_markup=get_route_keyboard(), parse_mode='Markdown')
             else:
-                # Для всего остального (дома, правила, баня) — просто текст с ценами
+                # Для всего остального (баня, контакты, правила) — просто текст
                 answer = sync_get_text(full_key)
                 bot.send_message(message.chat.id, answer, parse_mode='Markdown', disable_web_page_preview=False)
             return
 
-# 3. Обработчик нажатий на Inline-кнопки Маршрута
+# --- ОБРАБОТЧИКИ НАЖАТИЙ (CALLBACK) ---
+
+# Нажатие на выбор конкретного дома
+@bot.callback_query_handler(func=lambda call: call.data.startswith("HOUSE_"))
+def callback_houses(call):
+    house_id = call.data.replace("HOUSE_", "") # ПЯТЕРОЧКА, СРУБ и т.д.
+    # Формируем ключ для поиска в файле: ОПИСАНИЕ_ПЯТЕРОЧКА
+    answer = sync_get_text(f"ОПИСАНИЕ_{house_id}")
+    bot.send_message(call.message.chat.id, answer, parse_mode='Markdown', disable_web_page_preview=False)
+    bot.answer_callback_query(call.id)
+
+# Нажатие на выбор маршрута
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ROUTE_"))
 def callback_route(call):
-    # Определяем, какой блок из файла подтянуть
     topic = "МАРШРУТ_АВТО" if call.data == "ROUTE_AUTO" else "МАРШРУТ_ОБЩЕСТВЕННЫЙ"
     answer = sync_get_text(topic)
-    
     bot.send_message(call.message.chat.id, answer, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
-# 4. Точка входа
+# 3. Запуск
 if __name__ == "__main__":
     try:
         bot.remove_webhook()
-        print("✅ Бот 'Ботаничка' запущен!")
+        print("✅ Бот 'Ботаничка' запущен и готов к поглаживаниям (от кота)!")
         bot.infinity_polling(timeout=30)
     except Exception as e:
         print(f"🔥 Ошибка: {e}")
