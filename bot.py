@@ -2,7 +2,7 @@ import os
 import telebot
 import asyncio
 from telebot import types
-# Импортируем твои функции из соседних файлов
+# Импортируем функции из соседних файлов
 from gemini_handler import get_ai_answer
 from db_worker import run_parser
 from botani4ka import get_formatted_text, load_knowledge
@@ -35,10 +35,10 @@ def get_route_keyboard():
     markup.add(btn_car, btn_public)
     return markup
 
-# Кнопки для выбора конкретного дома (из блока Варианты проживания)
+# Кнопки для выбора конкретного дома (соответствуют вашим заголовкам в файле)
 def get_houses_keyboard():
     markup = types.InlineKeyboardMarkup()
-    # callback_data должна соответствовать ключам в knowledge.txt после префикса HOUSE_
+    # callback_data содержит ОДНО ключевое слово из заголовка в knowledge.txt
     btn_5 = types.InlineKeyboardButton("🏠 Пятёрочка", callback_data="HOUSE_ПЯТЕРОЧКА")
     btn_srub = types.InlineKeyboardButton("🌲 Сруб с баней", callback_data="HOUSE_СРУБ")
     btn_kom = types.InlineKeyboardButton("🏢 Коммуналка", callback_data="HOUSE_КОММУНАЛКА")
@@ -60,8 +60,10 @@ def handle_messages(message):
     msg_text = message.text.strip()
     msg_lower = msg_text.lower()
 
-    # --- КОМАНДА /START или запрос цен (Главное меню с кнопками домов) ---
-    if msg_lower == '/start' or any(word in msg_lower for word in ["цены", "стоимость", "варианты", "проживания"]):
+    # --- ГЛАВНОЕ МЕНЮ (Варианты проживания + Кнопки домов) ---
+    main_menu_triggers = ["цены", "стоимость", "варианты", "проживани", "размещен", "какие дома", "выбор дома"]
+    
+    if msg_lower == '/start' or any(word in msg_lower for word in main_menu_triggers):
         bot.send_chat_action(message.chat.id, 'typing')
         answer = sync_get_text("ВАРИАНТЫ_ПРОЖИВАНИЯ")
         bot.send_message(message.chat.id, answer, reply_markup=get_houses_keyboard(), parse_mode='Markdown')
@@ -89,7 +91,6 @@ def handle_messages(message):
 
     # --- УМНЫЙ ПОИСК ПО KNOWLEDGE.TXT ---
     for full_key in KNOWLEDGE.keys():
-        # Разбиваем заголовок из файла на отдельные слова-ключи
         keywords = [k.strip().lower() for k in full_key.split(',')]
         
         if any(word in msg_lower for word in keywords if len(word) > 2):
@@ -100,7 +101,7 @@ def handle_messages(message):
                 answer = sync_get_text(full_key)
                 bot.send_message(message.chat.id, answer, reply_markup=get_route_keyboard(), parse_mode='Markdown')
             else:
-                # Для всего остального (баня, контакты, правила) — просто текст
+                # Для всего остального — просто текст с ценами
                 answer = sync_get_text(full_key)
                 bot.send_message(message.chat.id, answer, parse_mode='Markdown', disable_web_page_preview=False)
             return
@@ -110,10 +111,16 @@ def handle_messages(message):
 # Нажатие на выбор конкретного дома
 @bot.callback_query_handler(func=lambda call: call.data.startswith("HOUSE_"))
 def callback_houses(call):
-    house_id = call.data.replace("HOUSE_", "") # ПЯТЕРОЧКА, СРУБ и т.д.
-    # Формируем ключ для поиска в файле: ОПИСАНИЕ_ПЯТЕРОЧКА
-    answer = sync_get_text(f"ОПИСАНИЕ_{house_id}")
+    # Извлекаем слово (ПЯТЕРОЧКА, СРУБ и т.д.)
+    topic = call.data.replace("HOUSE_", "") 
+    
+    # Ищем в файле и подставляем цены из БД через ботаничку
+    answer = sync_get_text(topic)
+    
+    # Отправляем описание НОВЫМ сообщением
     bot.send_message(call.message.chat.id, answer, parse_mode='Markdown', disable_web_page_preview=False)
+    
+    # Убираем "часики" с кнопки
     bot.answer_callback_query(call.id)
 
 # Нажатие на выбор маршрута
@@ -128,7 +135,7 @@ def callback_route(call):
 if __name__ == "__main__":
     try:
         bot.remove_webhook()
-        print("✅ Бот 'Ботаничка' запущен и готов к поглаживаниям (от кота)!")
+        print("✅ Бот запущен! Кнопки и цены синхронизированы.")
         bot.infinity_polling(timeout=30)
     except Exception as e:
         print(f"🔥 Ошибка: {e}")
