@@ -3,8 +3,9 @@ pyTelegramBotAPI==4.25.0
 flask
 requests
 beautifulsoup4
-pymysql
 lxml
 pymysql
+aiomysql
+cryptography
 
 
