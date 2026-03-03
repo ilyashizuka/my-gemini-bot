@@ -1,80 +1,61 @@
 import os
-import telebot
-# Импортируем твои функции из соседних файлов
-from gemini_handler import get_ai_answer
-from db_worker import run_parser
+import re
+import aiomysql
 
-# 1. Загрузка настроек из Render (Environment)
-raw_token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
-BOT_TOKEN = raw_token.replace('"', '').replace("'", "")
-ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
+# Данные для подключения (из твоего конфига)
+DB_CONFIG = {
+    'host': 'mysql9.hostland.ru',
+    'port': 3306,
+    'user': 'host1324224',
+    'password': os.environ.get('DB_PASSWORD'),
+    'db': 'host1324224_botanik',
+    'charset': 'utf8mb4',
+    'cursorclass': aiomysql.DictCursor,
+}
 
-# 2. Проверка токена перед запуском
-if not BOT_TOKEN:
-    print("❌ ОШИБКА: Переменная TELEGRAM_BOT_TOKEN не найдена!")
-elif ":" not in BOT_TOKEN:
-    print(f"❌ ОШИБКА: Токен некорректен (нет двоеточия). Проверь Render.")
+def load_knowledge():
+    """Читает knowledge.txt и режет его на блоки по === заголовок ==="""
+    if not os.path.exists("knowledge.txt"):
+        print("❌ Файл knowledge.txt не найден!")
+        return {}
+    with open("knowledge.txt", "r", encoding="utf-8") as f:
+        content = f.read()
+    
+    blocks = re.split(r'===', content)
+    kb = {}
+    for i in range(1, len(blocks), 2):
+        # Очищаем заголовки (ключи) и переводим в верхний регистр
+        keys = [k.strip().upper() for k in blocks[i].split(',')]
+        body = blocks[i+1].strip()
+        for key in keys:
+            kb[key] = body
+    return kb
 
-# 3. Инициализация бота (ЕДИНСТВЕННАЯ на весь проект)
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# 4. Обработчик всех входящих сообщений
-@bot.message_handler(func=lambda m: True)
-def handle_messages(message):
-    if not message.text:
-        return
-
-        # Команда обновления базы (только для админа)
-    if message.text == '/update':
-        if message.from_user.id == ADMIN_ID:
-            bot.reply_to(message, "⏳ Начинаю парсинг сайта...")
-            
-            # Получаем результат (теперь это список)
-            result = run_parser()
-            
-            if isinstance(result, list):
-                # Формируем отчет из 15 строк
-                report = f"<b>✅ База успешно обновлена!</b>\n"
-                report += f"Найдено позиций: <b>{len(result)}</b>\n\n"
-                
-                for item in result:
-                    url, title, price, content = item
-                    # Если есть описание (для лодок/бани), добавляем его в скобках
-                    line = f"• {title}: <b>{price} руб.</b>"
-                    if content:
-                        line += f" — <i>{content}</i>"
-                    report += line + "\n"
-                
-                bot.send_message(message.chat.id, report, parse_mode='HTML', disable_web_page_preview=True)
-            else:
-                # Если вернулась строка с ошибкой
-                bot.send_message(message.chat.id, result)
-        else:
-            bot.reply_to(message, "🔐 Доступ к обновлению только для администратора.")
-        return
-
-
-    # Вызов Gemini через префикс /**
-    if message.text.startswith('/**'):
-        query = message.text[3:].strip()
-        if query:
-            # Эффект "печатает..."
-            bot.send_chat_action(message.chat.id, 'typing')
-            # Вызов функции из gemini_handler.py
-            answer = get_ai_answer(query)
-            bot.reply_to(message, answer)
-        else:
-            bot.reply_to(message, "Напиши вопрос после /**, например: /** как дела?")
-
-# 5. Точка входа
-if __name__ == "__main__":
+async def get_formatted_text(topic_key):
+    """Берет текст из файла и вставляет цены из MySQL"""
+    # Подгружаем базу (в bot.py она уже загружена, но тут для страховки)
+    kb = load_knowledge()
+    template = kb.get(topic_key.upper(), f"Информация по запросу '{topic_key}' не найдена.")
+    
+    conn = None
     try:
-        print("🚀 Очистка старых соединений (Fix Error 409)...")
-        # Принудительно сбрасываем старое подключение перед запуском
-        bot.remove_webhook() 
-        print("✅ Бот успешно запущен и слушает команды!")
-        # Запускаем с чуть большими таймаутами для стабильности на Render
-        bot.infinity_polling(timeout=30, long_polling_timeout=15)
+        conn = await aiomysql.connect(**DB_CONFIG)
+        async with conn.cursor() as cur:
+            # name — ключ (price_house_5), value — цена
+            await cur.execute("SELECT name, value FROM prices")
+            rows = await cur.fetchall()
+            
+            # Собираем словарь цен
+            prices = {row['name']: str(row['value']) for row in rows}
+            # Константы, которых нет в БД
+            prices['price_linen'] = "300"
+            
+            # Форматируем шаблон данными из БД
+            return template.format(**prices)
     except Exception as e:
-        print(f"🔥 Критическая ошибка при работе: {e}")
-
+        print(f"⚠️ Ошибка MySQL: {e}")
+        # Если база упала, возвращаем текст как есть (с тегами {price})
+        return template
+    finally:
+        if conn:
+            conn.close()
