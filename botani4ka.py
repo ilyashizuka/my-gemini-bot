@@ -2,7 +2,7 @@ import os
 import re
 import aiomysql
 
-# Данные для подключения к Hostland (из твоего конфига)
+# Конфигурация БД (Hostland) — из твоего рабочего конфига
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
     'port': 3306,
@@ -14,20 +14,17 @@ DB_CONFIG = {
 }
 
 def load_knowledge():
-    """Читает knowledge.txt и разбивает на блоки по === заголовок ==="""
+    """Чтение файла и разбивка на блоки по === заголовок ==="""
     file_path = "knowledge.txt"
-    if not os.path.exists(file_path):
-        print(f"❌ ОШИБКА: Файл {file_path} не найден!")
-        return {}
-    
+    if not os.path.exists(file_path): return {}
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
     
-    # Режем по разделителю ===
+    # Режем файл по разделителю ===
     blocks = re.split(r'===', content)
     kb = {}
     for i in range(1, len(blocks), 2):
-        # Очищаем ключи (заголовки через запятую) и в верхний регистр
+        # Сохраняем ключи (заголовки) в верхнем регистре для поиска
         keys = [k.strip().upper() for k in blocks[i].split(',')]
         body = blocks[i+1].strip()
         for key in keys:
@@ -39,23 +36,38 @@ async def get_formatted_text(topic_key):
     kb = load_knowledge()
     template = kb.get(topic_key.upper(), f"Информация по запросу '{topic_key}' не найдена.")
     
-    # КАРТА СООТВЕТСТВИЯ (URL из твоего парсера -> Теги в твоем файле)
+    # КАРТА СООТВЕТСТВИЯ (URL из парсера -> Теги в твоем файле knowledge.txt)
     mapping = {
+        # Домики
         "https://vuoksa-virta.ru#5-ka": "price_house_5",
         "https://vuoksa-virta.ru#homewithsauna": "price_srub",
         "https://vuoksa-virta.ru#figwam": "price_bungalo",
         "https://vuoksa-virta.ru#nomernadellingom": "price_komunalka",
         "https://vuoksa-virta.ru#studia": "price_studio",
+        
+        # Баня на дровах
         "https://vuoksa-virta.ru#sauna_in": "price_sauna_in",
-        "https://vuoksa-virta.ru#sauna_out": "price_sauna_out"
+        "https://vuoksa-virta.ru#sauna_out": "price_sauna_out",
+        
+        # Прокат Лодок (Мираж)
+        "https://vuoksa-virta.ru#boat_in_0": "price_mirage_day_in",
+        "https://vuoksa-virta.ru#boat_out_0": "price_mirage_day_out",
+        "https://vuoksa-virta.ru#boat_in_1": "price_mirage_sutki_in",
+        "https://vuoksa-virta.ru#boat_out_1": "price_mirage_sutki_out",
+        
+        # Прокат Лодок (Пелла)
+        "https://vuoksa-virta.ru#boat_in_2": "price_pella_day_in",
+        "https://vuoksa-virta.ru#boat_out_2": "price_pella_day_out",
+        "https://vuoksa-virta.ru#boat_in_3": "price_pella_sutki_in",
+        "https://vuoksa-virta.ru#boat_out_3": "price_pella_sutki_out"
     }
 
     conn = None
     try:
-        # Подключаемся асинхронно к MySQL
+        # Асинхронное подключение к MySQL
         conn = await aiomysql.connect(**DB_CONFIG)
         async with conn.cursor() as cur:
-            # Выбираем данные, которые вчера/сегодня записал парсер
+            # Читаем данные, которые вчера/сегодня записал парсер
             await cur.execute("SELECT url, price FROM parsed_content")
             rows = await cur.fetchall()
             
@@ -64,21 +76,21 @@ async def get_formatted_text(topic_key):
             for row in rows:
                 url = row['url']
                 if url in mapping:
-                    # Очищаем цену от 'рублей' и пробелов, оставляем только цифры
+                    # Чистим цену (оставляем только цифры)
                     val = str(row['price'])
                     clean_price = re.sub(r'\D', '', val)
                     prices[mapping[url]] = clean_price
             
-            # Добавляем константы, которых нет в парсере
+            # Постоянные величины (константы)
             prices['price_linen'] = "300"
             prices['price_extra_bed'] = "1000"
 
-            # Магия подстановки цен в фигурные скобки {price_...}
+            # Вставляем значения из БД в шаблон {price_...}
             return template.format(**prices)
             
     except Exception as e:
         print(f"⚠️ Ошибка сборки текста в ботаничке: {e}")
-        # Если база не ответила, отдаем текст как есть
+        # Если база не ответила, отдаем сырой текст из файла
         return template
     finally:
         if conn:
