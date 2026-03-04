@@ -2,6 +2,7 @@ import os
 import re
 import aiomysql
 
+# Конфигурация БД (Hostland)
 DB_CONFIG = {
     'host': 'mysql9.hostland.ru',
     'port': 3306,
@@ -12,12 +13,13 @@ DB_CONFIG = {
     'cursorclass': aiomysql.DictCursor,
 }
 
-# Специальный класс, чтобы бот НЕ ПАДАЛ, если какой-то цены нет в БД
+# Защита от падения бота при отсутствии ключа в БД
 class SafeDict(dict):
     def __missing__(self, key):
         return '{' + key + '}'
 
 def load_knowledge():
+    """Читает файл и режет на блоки по === заголовок ==="""
     file_path = "knowledge.txt"
     if not os.path.exists(file_path): return {}
     with open(file_path, "r", encoding="utf-8") as f:
@@ -31,16 +33,21 @@ def load_knowledge():
     return kb
 
 async def get_formatted_text(topic_key):
+    """Сборка текста: Шаблон из файла + Цены из БД по URL-хвостам"""
     kb = load_knowledge()
     target_key = topic_key.upper()
     template = kb.get(target_key)
+    
+    # Поиск по вхождению (если ключ сложный)
     if not template:
         for k, v in kb.items():
             if target_key in k:
                 template = v
                 break
-    if not template: return f"Инфо по запросу {topic_key} не найдено."
+    
+    if not template: return f"Информация по запросу {topic_key} не найдена."
 
+    # КАРТА: Хвост URL в базе -> Тег в знании (knowledge.txt)
     mapping = {
         "#5-ka": "price_house_5",
         "#homewithsauna": "price_srub",
@@ -59,28 +66,31 @@ async def get_formatted_text(topic_key):
         "#boat_out_3": "price_pella_sutki_out"
     }
 
+    conn = None
     try:
         conn = await aiomysql.connect(**DB_CONFIG)
         async with conn.cursor() as cur:
             await cur.execute("SELECT url, price FROM parsed_content")
             rows = await cur.fetchall()
             
-            prices_dict = SafeDict() # Используем безопасный словарь
+            # Используем безопасный словарь
+            prices_data = SafeDict()
             for row in rows:
                 db_url = row['url']
                 for suffix, tag in mapping.items():
-                    # Если хвостик типа #5-ka есть в ссылке из базы
                     if suffix in db_url:
-                        clean_price = re.sub(r'\D', '', str(row['price']))
-                        prices_dict[tag] = clean_price
+                        # Чистим цену: оставляем только цифры
+                        clean_val = re.sub(r'\D', '', str(row['price']))
+                        prices_data[tag] = clean_val
             
-            prices_dict.update({"price_linen": "300", "price_extra_bed": "1000"})
+            # Константы
+            prices_data.update({"price_linen": "300", "price_extra_bed": "1000"})
             
-            # Теперь это никогда не выдаст ошибку KeyError
-            return template.format_map(prices_dict)
+            # Подставляем данные в шаблон через безопасный метод
+            return template.format_map(prices_data)
             
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Ошибка в ботаничке: {e}")
         return template
     finally:
-        if 'conn' in locals(): conn.close()
+        if conn: conn.close()
