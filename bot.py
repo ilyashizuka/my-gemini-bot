@@ -152,8 +152,14 @@ def callback_inline(call):
 
 if __name__ == "__main__":
     try:
+        # 1. Принудительно удаляем вебхуки и старые соединения
         bot.remove_webhook()
+        # 2. Маленькая пауза, чтобы Telegram успел закрыть старую сессию
+        import time
+        time.sleep(2) 
+        
         print("✅ Ботаничка в сети и готова приветствовать гостей!")
-        bot.infinity_polling(timeout=30)
+        # 3. Запускаем с интервалом проверки (interval), это тоже снижает риск 409
+        bot.infinity_polling(timeout=30, long_polling_timeout=5, interval=1)
     except Exception as e:
-        print(f"🔥 Ошибка: {e}")
+        print(f"🔥 Критическая ошибка запуска: {e}")
