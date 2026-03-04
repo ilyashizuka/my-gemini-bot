@@ -29,7 +29,14 @@ def sync_get_text(topic):
 
 # Постоянное НИЖНЕЕ меню (Reply Keyboard)
 def get_main_reply_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, selective=False)
+    # Добавили input_field_placeholder — это текст внутри поля ввода, 
+    # он часто помогает "проявить" кнопки в интерфейсе групп
+    markup = types.ReplyKeyboardMarkup(
+        resize_keyboard=True, 
+        row_width=2, 
+        selective=False,
+        input_field_placeholder="Выберите нужный раздел..."
+    )
     btn_houses = types.KeyboardButton("🏠 Дома и цены")
     btn_boats = types.KeyboardButton("🚣‍♂️ Прокат лодок")
     btn_route = types.KeyboardButton("📍 Маршрут")
