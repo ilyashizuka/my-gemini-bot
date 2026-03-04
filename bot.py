@@ -6,6 +6,7 @@ from telebot import types
 from gemini_handler import get_ai_answer
 from db_worker import run_parser
 from botani4ka import get_formatted_text, load_knowledge
+import sys; sys.stdout.reconfigure(line_buffering=True)
 
 # 1. Настройки из Render
 raw_token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
