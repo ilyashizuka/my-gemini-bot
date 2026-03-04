@@ -27,7 +27,6 @@ def sync_get_text(topic):
 
 # --- БЛОК КНОПОК ---
 
-# Кнопки для раздела Маршрут
 def get_route_keyboard():
     markup = types.InlineKeyboardMarkup()
     btn_car = types.InlineKeyboardButton("🚗 На машине", callback_data="ROUTE_AUTO")
@@ -35,10 +34,9 @@ def get_route_keyboard():
     markup.add(btn_car, btn_public)
     return markup
 
-# Кнопки для выбора конкретного дома (соответствуют вашим заголовкам в файле)
 def get_houses_keyboard():
     markup = types.InlineKeyboardMarkup()
-    # callback_data содержит ОДНО ключевое слово из заголовка в knowledge.txt
+    # Кнопки для выбора конкретного дома (соответствуют заголовкам в знании)
     btn_5 = types.InlineKeyboardButton("🏠 Пятёрочка", callback_data="HOUSE_ПЯТЕРОЧКА")
     btn_srub = types.InlineKeyboardButton("🌲 Сруб с баней", callback_data="HOUSE_СРУБ")
     btn_kom = types.InlineKeyboardButton("🏢 Коммуналка", callback_data="HOUSE_КОММУНАЛКА")
@@ -50,9 +48,9 @@ def get_houses_keyboard():
     markup.add(btn_bg)
     return markup
 
-# --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
+# --- ОБРАБОТЧИК ВСЕХ СООБЩЕНИЙ ---
 
-@bot.message_handler(func=lambda m: True)
+@bot.message_handler(func=lambda m: True, content_types=['text'])
 def handle_messages(message):
     if not message.text:
         return
@@ -60,9 +58,8 @@ def handle_messages(message):
     msg_text = message.text.strip()
     msg_lower = msg_text.lower()
 
-    # --- ГЛАВНОЕ МЕНЮ (Варианты проживания + Кнопки домов) ---
+    # --- КОМАНДА /START или Общие запросы цен ---
     main_menu_triggers = ["цены", "стоимость", "варианты", "проживани", "размещен", "какие дома", "выбор дома"]
-    
     if msg_lower == '/start' or any(word in msg_lower for word in main_menu_triggers):
         bot.send_chat_action(message.chat.id, 'typing')
         answer = sync_get_text("ВАРИАНТЫ_ПРОЖИВАНИЯ")
@@ -70,14 +67,10 @@ def handle_messages(message):
         return
 
     # --- КОМАНДА /UPDATE (АДМИН) ---
-    if msg_lower == '/update':
-        if message.from_user.id == ADMIN_ID:
-            bot.reply_to(message, "⏳ Обновляю базу цен с сайта...")
-            result = run_parser()
-            if isinstance(result, list):
-                bot.send_message(message.chat.id, f"✅ База успешно обновлена! Найдено позиций: {len(result)}")
-            else:
-                bot.send_message(message.chat.id, result)
+    if msg_lower == '/update' and message.from_user.id == ADMIN_ID:
+        bot.reply_to(message, "⏳ Обновляю базу цен с сайта...")
+        result = run_parser()
+        bot.send_message(message.chat.id, "✅ База успешно обновлена!")
         return
 
     # --- ВЫЗОВ GEMINI (/**) ---
@@ -90,40 +83,39 @@ def handle_messages(message):
         return
 
     # --- УМНЫЙ ПОИСК ПО KNOWLEDGE.TXT ---
+    # Бот проверяет лодки отдельно, чтобы на слово "мотор" выдавать прайс лодок
+    boat_triggers = ["лодки", "прокат", "весла", "мотор", "мираж", "пелла"]
+    if any(word in msg_lower for word in boat_triggers):
+        bot.send_chat_action(message.chat.id, 'typing')
+        answer = sync_get_text("ЛОДКИ")
+        bot.send_message(message.chat.id, answer, parse_mode='Markdown')
+        return
+
+    # Поиск по всем остальным блокам из файла
     for full_key in KNOWLEDGE.keys():
         keywords = [k.strip().lower() for k in full_key.split(',')]
-        
         if any(word in msg_lower for word in keywords if len(word) > 2):
             bot.send_chat_action(message.chat.id, 'typing')
             
-            # Если это Маршрут — выдаем текст с кнопками проезда
+            # Если это Маршрут — выдаем текст с кнопками
             if any(r in keywords for r in ["маршрут", "доехать", "добраться"]):
                 answer = sync_get_text(full_key)
                 bot.send_message(message.chat.id, answer, reply_markup=get_route_keyboard(), parse_mode='Markdown')
             else:
-                # Для всего остального — просто текст с ценами
+                # Все остальное (баня, контакты, правила)
                 answer = sync_get_text(full_key)
                 bot.send_message(message.chat.id, answer, parse_mode='Markdown', disable_web_page_preview=False)
             return
 
-# --- ОБРАБОТЧИКИ НАЖАТИЙ (CALLBACK) ---
+# --- CALLBACK ОБРАБОТЧИКИ ---
 
-# Нажатие на выбор конкретного дома
 @bot.callback_query_handler(func=lambda call: call.data.startswith("HOUSE_"))
 def callback_houses(call):
-    # Извлекаем слово (ПЯТЕРОЧКА, СРУБ и т.д.)
     topic = call.data.replace("HOUSE_", "") 
-    
-    # Ищем в файле и подставляем цены из БД через ботаничку
     answer = sync_get_text(topic)
-    
-    # Отправляем описание НОВЫМ сообщением
     bot.send_message(call.message.chat.id, answer, parse_mode='Markdown', disable_web_page_preview=False)
-    
-    # Убираем "часики" с кнопки
     bot.answer_callback_query(call.id)
 
-# Нажатие на выбор маршрута
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ROUTE_"))
 def callback_route(call):
     topic = "МАРШРУТ_АВТО" if call.data == "ROUTE_AUTO" else "МАРШРУТ_ОБЩЕСТВЕННЫЙ"
@@ -131,11 +123,10 @@ def callback_route(call):
     bot.send_message(call.message.chat.id, answer, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
-# 3. Запуск
 if __name__ == "__main__":
     try:
         bot.remove_webhook()
-        print("✅ Бот запущен! Кнопки и цены синхронизированы.")
+        print("✅ Бот запущен и слышит группу!")
         bot.infinity_polling(timeout=30)
     except Exception as e:
         print(f"🔥 Ошибка: {e}")
