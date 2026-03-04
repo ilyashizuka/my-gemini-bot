@@ -2,27 +2,32 @@ import os
 import telebot
 import asyncio
 from telebot import types
+# Импортируем твои функции из соседних файлов
 from gemini_handler import get_ai_answer
 from db_worker import run_parser
 from botani4ka import get_formatted_text, load_knowledge
 
-# 1. Настройки
+# 1. Настройки из Render
 raw_token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
 BOT_TOKEN = raw_token.replace('"', '').replace("'", "")
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# Предварительная загрузка базы знаний (один раз при старте)
 KNOWLEDGE = load_knowledge()
 
+# Вспомогательная функция для синхронного запуска асинхронной "ботанички"
 def sync_get_text(topic):
     try:
         return asyncio.run(get_formatted_text(topic))
     except Exception as e:
-        print(f"❌ Ошибка данных: {e}")
-        return "⚠️ Не удалось загрузить информацию."
+        print(f"❌ Ошибка сборки текста для {topic}: {e}")
+        return "⚠️ Ошибка загрузки данных. Пожалуйста, попробуйте позже."
 
-# --- КЛАВИАТУРЫ ---
+# --- БЛОК КЛАВИАТУР ---
 
+# Постоянное НИЖНЕЕ меню (Reply Keyboard) - для Супергруппы
 def get_main_reply_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, selective=False)
     markup.add(
@@ -34,6 +39,7 @@ def get_main_reply_keyboard():
     )
     return markup
 
+# Кнопки под описанием вариантов проживания (Inline)
 def get_houses_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -45,88 +51,108 @@ def get_houses_keyboard():
     )
     return markup
 
+# Кнопки для выбора маршрута (Inline)
 def get_route_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=2)
-    # Эти callback_data ДОЛЖНЫ совпадать с логикой в обработчике ниже
-    btn_car = types.InlineKeyboardButton("🚗 На машине", callback_data="ROUTE_AUTO")
-    btn_public = types.InlineKeyboardButton("🚌 Автобус / Электричка", callback_data="ROUTE_PUBLIC")
-    markup.add(btn_car, btn_public)
+    markup.add(
+        types.InlineKeyboardButton("🚗 На машине", callback_data="ROUTE_AUTO"),
+        types.InlineKeyboardButton("🚌 Автобус / Электричка", callback_data="ROUTE_PUBLIC")
+    )
     return markup
 
 # --- ОБРАБОТЧИК СООБЩЕНИЙ ---
 
 @bot.message_handler(func=lambda m: True, content_types=['text'])
 def handle_messages(message):
-    if not message.text: return
+    if not message.text:
+        return
+
     msg_text = message.text.strip()
     msg_lower = msg_text.lower()
 
-    # --- КОМАНДЫ /START и /MENU ---
+    # --- 1. ПРИВЕТСТВИЕ (Только Ботаничка и Кнопки) ---
     if msg_lower in ['/start', '/menu', 'меню']:
-        welcome = "<b>🌿 База «Вуокса-Вирта»</b>\nИспользуйте меню под клавиатурой для навигации:"
+        bot.send_chat_action(message.chat.id, 'typing')
+        welcome = (
+            "<b>Привет! Я помощница Ботаничка.</b> 🌿\n\n"
+            "Помогу сориентироваться на базе «Вуокса-Вирта».\n"
+            "Выберите нужный раздел в меню под клавиатурой:"
+        )
         bot.send_message(message.chat.id, welcome, reply_markup=get_main_reply_keyboard(), parse_mode='HTML')
         return
 
-    # --- ДОМА И ЦЕНЫ ---
-    if any(word in msg_lower for word in ["цены", "стоимость", "варианты", "🏠 дома и цены"]):
+    # --- 2. ДОМА И ЦЕНЫ ---
+    price_triggers = ["цены", "стоимость", "🏠 дома и цены", "проживание"]
+    if any(word in msg_lower for word in price_triggers):
+        bot.send_chat_action(message.chat.id, 'typing')
         answer = sync_get_text("ВАРИАНТЫ_ПРОЖИВАНИЯ")
         bot.send_message(message.chat.id, answer, reply_markup=get_houses_keyboard(), parse_mode='Markdown')
         return
 
-    # --- МАРШРУТ (Главный триггер с кнопками выбора) ---
+    # --- 3. МАРШРУТ (С кнопками выбора транспорта) ---
     if any(word in msg_lower for word in ["маршрут", "доехать", "добраться", "📍"]):
+        bot.send_chat_action(message.chat.id, 'typing')
         answer = sync_get_text("МАРШРУТ")
         bot.send_message(message.chat.id, answer, reply_markup=get_route_keyboard(), parse_mode='Markdown')
         return
 
-    # --- ЛОДКИ, САУНА, КОНТАКТЫ ---
+    # --- 4. ВЫЗОВ GEMINI (/**) - ТОЛЬКО ДЛЯ АДМИНА ---
+    if msg_text.startswith('/**'):
+        if message.from_user.id == ADMIN_ID:
+            query = msg_text[3:].strip()
+            if query:
+                bot.send_chat_action(message.chat.id, 'typing')
+                answer = get_ai_answer(query)
+                bot.reply_to(message, answer)
+        return
+
+    # --- 5. КОМАНДА /UPDATE (АДМИН) ---
+    if msg_lower == '/update' and message.from_user.id == ADMIN_ID:
+        bot.reply_to(message, "⏳ Обновляю базу цен...")
+        run_parser()
+        bot.send_message(message.chat.id, "✅ База MySQL успешно обновлена!")
+        return
+
+    # --- 6. ОБРАБОТКА ТЕКСТОВЫХ КНОПОК НИЖНЕГО МЕНЮ ---
     if any(word in msg_lower for word in ["лодки", "прокат", "🚣‍♂️"]):
         bot.send_message(message.chat.id, sync_get_text("ЛОДКИ"), parse_mode='Markdown')
         return
+    
     if any(word in msg_lower for word in ["сауна", "баня", "🔥"]):
         bot.send_message(message.chat.id, sync_get_text("БАНЯ_НА_ДРОВАХ"), parse_mode='Markdown')
         return
+    
     if any(word in msg_lower for word in ["контакты", "📞", "телефон"]):
         bot.send_message(message.chat.id, sync_get_text("КОНТАКТЫ"), parse_mode='Markdown')
         return
 
-    # --- ИИ (Только Админ) ---
-    if msg_text.startswith('/**') and message.from_user.id == ADMIN_ID:
-        query = msg_text[3:].strip()
-        if query: bot.reply_to(message, get_ai_answer(query))
-        return
-
-    # --- ОБНОВЛЕНИЕ БАЗЫ (Админ) ---
-    if msg_lower == '/update' and message.from_user.id == ADMIN_ID:
-        bot.reply_to(message, "⏳ Обновляю...")
-        run_parser()
-        bot.send_message(message.chat.id, "✅ Цены обновлены!")
-        return
-
-    # --- УМНЫЙ ПОИСК ПО ФАЙЛУ (Для всего остального) ---
-    for key in KNOWLEDGE.keys():
-        keywords = [k.strip().lower() for k in key.split(',')]
+    # --- 7. УМНЫЙ ПОИСК ПО KNOWLEDGE.TXT (Остальные ключи) ---
+    for full_key in KNOWLEDGE.keys():
+        keywords = [k.strip().lower() for k in full_key.split(',')]
         if any(word in msg_lower for word in keywords if len(word) > 2):
-            bot.send_message(message.chat.id, sync_get_text(key), parse_mode='Markdown')
+            bot.send_chat_action(message.chat.id, 'typing')
+            answer = sync_get_text(full_key)
+            bot.send_message(message.chat.id, answer, parse_mode='Markdown', disable_web_page_preview=False)
             return
 
 # --- ОБРАБОТЧИКИ НАЖАТИЙ (CALLBACK) ---
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_inline(call):
-    # Выбор дома
     if call.data.startswith("HOUSE_"):
         topic = call.data.replace("HOUSE_", "")
         bot.send_message(call.message.chat.id, sync_get_text(topic), parse_mode='Markdown')
     
-    # Выбор маршрута (ТЕ САМЫЕ КНОПКИ)
     elif call.data.startswith("ROUTE_"):
-        # Если нажали "На машине" -> ищем МАРШРУТ_АВТО в файле
         topic = "МАРШРУТ_АВТО" if call.data == "ROUTE_AUTO" else "МАРШРУТ_ОБЩЕСТВЕННЫЙ"
         bot.send_message(call.message.chat.id, sync_get_text(topic), parse_mode='Markdown')
     
     bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
-    bot.remove_webhook()
-    bot.infinity_polling(timeout=30)
+    try:
+        bot.remove_webhook()
+        print("✅ Ботаничка в сети и готова приветствовать гостей!")
+        bot.infinity_polling(timeout=30)
+    except Exception as e:
+        print(f"🔥 Ошибка: {e}")
