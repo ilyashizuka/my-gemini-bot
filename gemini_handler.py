@@ -1,12 +1,12 @@
 import os
 import sys
 import google.generativeai as genai
-from google.generativeai.types import RequestOptions
 
-# Чтобы логи в Render появлялись мгновенно
+# Мгновенные логи
 sys.stdout.reconfigure(line_buffering=True)
 
 def get_ai_answer(prompt):
+    # Твоя система перебора ключей и моделей
     key_names = ['GEMINI_KEY_1', 'GEMINI_KEY_2', 'GEMINI_KEY_3']
     models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash']
 
@@ -15,12 +15,12 @@ def get_ai_answer(prompt):
     for name in key_names:
         raw_key = os.environ.get(name)
         if not raw_key:
-            print(f"❓ Переменная {name} не найдена в Render.")
+            print(f"❓ Переменная {name} не найдена.")
             continue
             
         try:
             key = raw_key.strip().replace('"', '').replace("'", "")
-            print(f"🔑 Пробую ключ {name} (длина: {len(key)} симв.)...")
+            print(f"🔑 Пробую ключ {name}...")
             
             genai.configure(api_key=key)
             
@@ -29,10 +29,8 @@ def get_ai_answer(prompt):
                     print(f"🤖 Пробую модель {model_name}...")
                     model = genai.GenerativeModel(model_name)
                     
-                    response = model.generate_content(
-                        prompt, 
-                        request_options=RequestOptions(api_version='v1')
-                    )
+                    # Убрали RequestOptions(api_version='v1'), чтобы не было конфликта
+                    response = model.generate_content(prompt)
                     
                     if response and response.text:
                         print(f"✅ УСПЕХ: Ответ получен через {name} / {model_name}")
@@ -46,5 +44,5 @@ def get_ai_answer(prompt):
             print(f"🔥 Ошибка конфигурации {name}: {config_err}")
             continue
             
-    print("❌ ИТОГ: Ни один ключ или модель не сработали.")
-    return "❌ Ошибка: Все ключи ИИ исчерпаны или недоступны."
+    print("❌ ИТОГ: Все варианты перебраны, ответа нет.")
+    return "❌ Ошибка: ИИ не смог пробиться. Проверь логи Render."
