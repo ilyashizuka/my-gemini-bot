@@ -18,12 +18,11 @@ def sync_get_text(topic):
     try:
         return asyncio.run(get_formatted_text(topic))
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
-        return "⚠️ Ошибка загрузки данных."
+        print(f"❌ Ошибка данных: {e}")
+        return "⚠️ Не удалось загрузить информацию."
 
-# --- БЛОК КЛАВИАТУР ---
+# --- КЛАВИАТУРЫ ---
 
-# Та самая нижняя панель, которая будет видна во всех темах
 def get_main_reply_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, selective=False)
     markup.add(
@@ -35,7 +34,6 @@ def get_main_reply_keyboard():
     )
     return markup
 
-# Инлайн-кнопки для выбора домика
 def get_houses_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -47,7 +45,15 @@ def get_houses_keyboard():
     )
     return markup
 
-# --- ОБРАБОТЧИКИ ---
+def get_route_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    # Эти callback_data ДОЛЖНЫ совпадать с логикой в обработчике ниже
+    btn_car = types.InlineKeyboardButton("🚗 На машине", callback_data="ROUTE_AUTO")
+    btn_public = types.InlineKeyboardButton("🚌 Автобус / Электричка", callback_data="ROUTE_PUBLIC")
+    markup.add(btn_car, btn_public)
+    return markup
+
+# --- ОБРАБОТЧИК СООБЩЕНИЙ ---
 
 @bot.message_handler(func=lambda m: True, content_types=['text'])
 def handle_messages(message):
@@ -55,64 +61,72 @@ def handle_messages(message):
     msg_text = message.text.strip()
     msg_lower = msg_text.lower()
 
-    # 1. Вызов главного меню (по команде или кнопке)
-    main_triggers = ["/start", "/menu", "меню", "варианты", "🏠 дома и цены", "цены"]
-    if any(word in msg_lower for word in main_triggers):
-        bot.send_chat_action(message.chat.id, 'typing')
+    # --- КОМАНДЫ /START и /MENU ---
+    if msg_lower in ['/start', '/menu', 'меню']:
+        welcome = "<b>🌿 База «Вуокса-Вирта»</b>\nИспользуйте меню под клавиатурой для навигации:"
+        bot.send_message(message.chat.id, welcome, reply_markup=get_main_reply_keyboard(), parse_mode='HTML')
+        return
+
+    # --- ДОМА И ЦЕНЫ ---
+    if any(word in msg_lower for word in ["цены", "стоимость", "варианты", "🏠 дома и цены"]):
         answer = sync_get_text("ВАРИАНТЫ_ПРОЖИВАНИЯ")
-        # Отправляем сообщение С НИЖНИМ МЕНЮ (оно приклеится к теме)
-        bot.send_message(message.chat.id, answer, reply_markup=get_main_reply_keyboard(), parse_mode='Markdown')
-        # И сразу Инлайн-кнопки домов
-        bot.send_message(message.chat.id, "Выберите дом для деталей:", reply_markup=get_houses_keyboard())
+        bot.send_message(message.chat.id, answer, reply_markup=get_houses_keyboard(), parse_mode='Markdown')
         return
 
-    # 2. Ограничение ИИ (Gemini) только для тебя
-    if msg_text.startswith('/**'):
-        if message.from_user.id == ADMIN_ID:
-            query = msg_text[3:].strip()
-            if query: bot.reply_to(message, get_ai_answer(query))
+    # --- МАРШРУТ (Главный триггер с кнопками выбора) ---
+    if any(word in msg_lower for word in ["маршрут", "доехать", "добраться", "📍"]):
+        answer = sync_get_text("МАРШРУТ")
+        bot.send_message(message.chat.id, answer, reply_markup=get_route_keyboard(), parse_mode='Markdown')
         return
 
-    # 3. Обновление базы (Админ)
-    if msg_lower == '/update' and message.from_user.id == ADMIN_ID:
-        bot.reply_to(message, "⏳ Обновляю цены...")
-        run_parser()
-        bot.send_message(message.chat.id, "✅ База MySQL обновлена!")
-        return
-
-    # 4. Обработка кнопок нижнего меню (Лодки, Сауна, Контакты)
-    if "прокат лодок" in msg_lower:
+    # --- ЛОДКИ, САУНА, КОНТАКТЫ ---
+    if any(word in msg_lower for word in ["лодки", "прокат", "🚣‍♂️"]):
         bot.send_message(message.chat.id, sync_get_text("ЛОДКИ"), parse_mode='Markdown')
         return
-    if "🔥 сауна" in msg_lower or "баня" in msg_lower:
+    if any(word in msg_lower for word in ["сауна", "баня", "🔥"]):
         bot.send_message(message.chat.id, sync_get_text("БАНЯ_НА_ДРОВАХ"), parse_mode='Markdown')
         return
-    if "маршрут" in msg_lower:
-        bot.send_message(message.chat.id, sync_get_text("МАРШРУТ"), parse_mode='Markdown')
-        return
-    if "контакты" in msg_lower:
+    if any(word in msg_lower for word in ["контакты", "📞", "телефон"]):
         bot.send_message(message.chat.id, sync_get_text("КОНТАКТЫ"), parse_mode='Markdown')
         return
 
-    # 5. Общий поиск по файлу (на всякий случай)
+    # --- ИИ (Только Админ) ---
+    if msg_text.startswith('/**') and message.from_user.id == ADMIN_ID:
+        query = msg_text[3:].strip()
+        if query: bot.reply_to(message, get_ai_answer(query))
+        return
+
+    # --- ОБНОВЛЕНИЕ БАЗЫ (Админ) ---
+    if msg_lower == '/update' and message.from_user.id == ADMIN_ID:
+        bot.reply_to(message, "⏳ Обновляю...")
+        run_parser()
+        bot.send_message(message.chat.id, "✅ Цены обновлены!")
+        return
+
+    # --- УМНЫЙ ПОИСК ПО ФАЙЛУ (Для всего остального) ---
     for key in KNOWLEDGE.keys():
         keywords = [k.strip().lower() for k in key.split(',')]
         if any(word in msg_lower for word in keywords if len(word) > 2):
             bot.send_message(message.chat.id, sync_get_text(key), parse_mode='Markdown')
             return
 
-# --- ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК (ВЫБОР ДОМА) ---
+# --- ОБРАБОТЧИКИ НАЖАТИЙ (CALLBACK) ---
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_inline(call):
+    # Выбор дома
     if call.data.startswith("HOUSE_"):
         topic = call.data.replace("HOUSE_", "")
         bot.send_message(call.message.chat.id, sync_get_text(topic), parse_mode='Markdown')
+    
+    # Выбор маршрута (ТЕ САМЫЕ КНОПКИ)
+    elif call.data.startswith("ROUTE_"):
+        # Если нажали "На машине" -> ищем МАРШРУТ_АВТО в файле
+        topic = "МАРШРУТ_АВТО" if call.data == "ROUTE_AUTO" else "МАРШРУТ_ОБЩЕСТВЕННЫЙ"
+        bot.send_message(call.message.chat.id, sync_get_text(topic), parse_mode='Markdown')
+    
     bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
-    try:
-        bot.remove_webhook()
-        print("✅ Бот запущен! Кнопки нижнего меню готовы к работе в темах.")
-        bot.infinity_polling(timeout=30)
-    except Exception as e:
-        print(f"🔥 Ошибка: {e}")
+    bot.remove_webhook()
+    bot.infinity_polling(timeout=30)
