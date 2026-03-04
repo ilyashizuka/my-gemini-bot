@@ -8,20 +8,27 @@ def get_ai_answer(prompt):
 
     for name in key_names:
         raw_key = os.environ.get(name)
-        if not raw_key: continue
+        if not raw_key: 
+            continue
+            
         try:
             key = raw_key.strip().replace('"', '').replace("'", "")
             genai.configure(api_key=key)
+            
             for model_name in models_to_try:
                 try:
                     model = genai.GenerativeModel(model_name)
-                    # Принудительно v1 для стабильности на Render
                     response = model.generate_content(
                         prompt, 
                         request_options=RequestOptions(api_version='v1')
                     )
                     if response and response.text:
                         return response.text
-                except: continue
-        except: continue
-    return "❌ Ошибка: ИИ не ответил."
+                except Exception as e:
+                    print(f"⚠️ Ошибка модели {model_name} на ключе {name}: {e}")
+                    continue
+        except Exception as e:
+            print(f"🔥 Ошибка конфигурации ключа {name}: {e}")
+            continue
+            
+    return "❌ Ошибка: Все ключи ИИ исчерпаны или недоступны."
